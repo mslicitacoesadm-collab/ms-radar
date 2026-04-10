@@ -62,33 +62,47 @@ class Database:
                     link_processo_eletronico TEXT,
                     fonte_tipo TEXT,
                     fonte_data_referencia TEXT,
-                    oportunidade_score REAL DEFAULT 0,
-                    urgencia_score REAL DEFAULT 0,
-                    aderencia_score REAL DEFAULT 0,
-                    valor_score REAL DEFAULT 0,
-                    risco_score REAL DEFAULT 0,
+                    oportunidade_score REAL,
+                    urgencia_score REAL,
+                    aderencia_score REAL,
+                    valor_score REAL,
+                    risco_score REAL,
                     search_blob TEXT,
+                    detail_status TEXT DEFAULT 'summary',
+                    last_detail_attempt TEXT,
+                    last_detail_error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_opportunities_pub ON opportunities(data_publicacao_pncp);
-                CREATE INDEX IF NOT EXISTS idx_opportunities_end ON opportunities(data_encerramento_proposta);
-                CREATE INDEX IF NOT EXISTS idx_opportunities_city ON opportunities(uf_sigla, municipio_nome);
-                CREATE INDEX IF NOT EXISTS idx_opportunities_modalidade ON opportunities(modalidade_codigo);
-                CREATE INDEX IF NOT EXISTS idx_opportunities_score ON opportunities(oportunidade_score DESC);
-
                 CREATE VIRTUAL TABLE IF NOT EXISTS opportunities_fts USING fts5(
-                    numero_controle_pncp UNINDEXED,
-                    objeto_compra,
+                    numero_controle_pncp,
                     resumo_objeto,
+                    objeto_compra,
                     orgao_razao_social,
                     municipio_nome,
+                    uf_sigla,
                     modalidade_nome,
-                    search_blob,
                     content='opportunities',
                     content_rowid='rowid'
                 );
+
+                CREATE TRIGGER IF NOT EXISTS opportunities_ai AFTER INSERT ON opportunities BEGIN
+                    INSERT INTO opportunities_fts(rowid, numero_controle_pncp, resumo_objeto, objeto_compra, orgao_razao_social, municipio_nome, uf_sigla, modalidade_nome)
+                    VALUES (new.rowid, new.numero_controle_pncp, new.resumo_objeto, new.objeto_compra, new.orgao_razao_social, new.municipio_nome, new.uf_sigla, new.modalidade_nome);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS opportunities_ad AFTER DELETE ON opportunities BEGIN
+                    INSERT INTO opportunities_fts(opportunities_fts, rowid, numero_controle_pncp, resumo_objeto, objeto_compra, orgao_razao_social, municipio_nome, uf_sigla, modalidade_nome)
+                    VALUES('delete', old.rowid, old.numero_controle_pncp, old.resumo_objeto, old.objeto_compra, old.orgao_razao_social, old.municipio_nome, old.uf_sigla, old.modalidade_nome);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS opportunities_au AFTER UPDATE ON opportunities BEGIN
+                    INSERT INTO opportunities_fts(opportunities_fts, rowid, numero_controle_pncp, resumo_objeto, objeto_compra, orgao_razao_social, municipio_nome, uf_sigla, modalidade_nome)
+                    VALUES('delete', old.rowid, old.numero_controle_pncp, old.resumo_objeto, old.objeto_compra, old.orgao_razao_social, old.municipio_nome, old.uf_sigla, old.modalidade_nome);
+                    INSERT INTO opportunities_fts(rowid, numero_controle_pncp, resumo_objeto, objeto_compra, orgao_razao_social, municipio_nome, uf_sigla, modalidade_nome)
+                    VALUES (new.rowid, new.numero_controle_pncp, new.resumo_objeto, new.objeto_compra, new.orgao_razao_social, new.municipio_nome, new.uf_sigla, new.modalidade_nome);
+                END;
 
                 CREATE TABLE IF NOT EXISTS alert_profiles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,14 +121,6 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS alert_hits (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    alert_profile_id INTEGER NOT NULL,
-                    numero_controle_pncp TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(alert_profile_id, numero_controle_pncp)
-                );
-
                 CREATE TABLE IF NOT EXISTS sync_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     started_at TEXT NOT NULL,
@@ -128,25 +134,36 @@ class Database:
                 );
                 """
             )
+            existing_cols = {row['name'] for row in conn.execute("PRAGMA table_info(opportunities)").fetchall()}
+            for col, ddl in {
+                'detail_status': "ALTER TABLE opportunities ADD COLUMN detail_status TEXT DEFAULT 'summary'",
+                'last_detail_attempt': "ALTER TABLE opportunities ADD COLUMN last_detail_attempt TEXT",
+                'last_detail_error': "ALTER TABLE opportunities ADD COLUMN last_detail_error TEXT",
+            }.items():
+                if col not in existing_cols:
+                    conn.execute(ddl)
 
     def rebuild_fts(self) -> None:
         with self.connect() as conn:
             conn.execute("INSERT INTO opportunities_fts(opportunities_fts) VALUES ('rebuild')")
 
-    def upsert_opportunities(self, rows: Iterable[dict[str, Any]]) -> tuple[int, int]:
+    def upsert_opportunities(self, rows: Iterable[dict[str, Any]], detail_status: str = 'summary') -> tuple[int, int]:
         now = datetime.utcnow().isoformat()
         inserted = 0
         updated = 0
         with self.connect() as conn:
             for row in rows:
                 current = conn.execute(
-                    'SELECT numero_controle_pncp FROM opportunities WHERE numero_controle_pncp = ?',
+                    'SELECT numero_controle_pncp, created_at, detail_status FROM opportunities WHERE numero_controle_pncp = ?',
                     (row['numero_controle_pncp'],),
                 ).fetchone()
                 payload = {
                     **row,
-                    'created_at': current['numero_controle_pncp'] if False else now,
+                    'created_at': current['created_at'] if current else now,
                     'updated_at': now,
+                    'detail_status': current['detail_status'] if current and current['detail_status'] == 'done' else detail_status,
+                    'last_detail_attempt': None,
+                    'last_detail_error': None,
                 }
                 if current:
                     updated += 1
@@ -188,6 +205,7 @@ class Database:
                             valor_score=:valor_score,
                             risco_score=:risco_score,
                             search_blob=:search_blob,
+                            detail_status=:detail_status,
                             updated_at=:updated_at
                         WHERE numero_controle_pncp=:numero_controle_pncp
                         """,
@@ -206,7 +224,7 @@ class Database:
                             data_encerramento_proposta, valor_total_estimado, valor_total_homologado,
                             link_sistema_origem, link_processo_eletronico, fonte_tipo, fonte_data_referencia,
                             oportunidade_score, urgencia_score, aderencia_score, valor_score, risco_score,
-                            search_blob, created_at, updated_at
+                            search_blob, detail_status, last_detail_attempt, last_detail_error, created_at, updated_at
                         ) VALUES (
                             :numero_controle_pncp, :numero_compra, :ano_compra, :sequencial_compra, :processo,
                             :objeto_compra, :resumo_objeto, :orgao_cnpj, :orgao_razao_social, :poder_id, :esfera_id,
@@ -216,13 +234,73 @@ class Database:
                             :data_encerramento_proposta, :valor_total_estimado, :valor_total_homologado,
                             :link_sistema_origem, :link_processo_eletronico, :fonte_tipo, :fonte_data_referencia,
                             :oportunidade_score, :urgencia_score, :aderencia_score, :valor_score, :risco_score,
-                            :search_blob, :created_at, :updated_at
+                            :search_blob, :detail_status, :last_detail_attempt, :last_detail_error, :created_at, :updated_at
                         )
                         """,
                         payload,
                     )
             conn.execute("INSERT INTO opportunities_fts(opportunities_fts) VALUES ('rebuild')")
         return inserted, updated
+
+    def update_detail_payload(self, numero_controle_pncp: str, payload: dict[str, Any]) -> None:
+        now = datetime.utcnow().isoformat()
+        data = {
+            'numero_controle_pncp': numero_controle_pncp,
+            'valor_total_estimado': payload['valor_total_estimado'],
+            'valor_total_homologado': payload['valor_total_homologado'],
+            'link_sistema_origem': payload['link_sistema_origem'],
+            'link_processo_eletronico': payload['link_processo_eletronico'],
+            'oportunidade_score': payload['oportunidade_score'],
+            'urgencia_score': payload['urgencia_score'],
+            'aderencia_score': payload['aderencia_score'],
+            'valor_score': payload['valor_score'],
+            'risco_score': payload['risco_score'],
+            'last_detail_attempt': now,
+            'updated_at': now,
+        }
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE opportunities SET
+                    valor_total_estimado=:valor_total_estimado,
+                    valor_total_homologado=:valor_total_homologado,
+                    link_sistema_origem=:link_sistema_origem,
+                    link_processo_eletronico=:link_processo_eletronico,
+                    oportunidade_score=:oportunidade_score,
+                    urgencia_score=:urgencia_score,
+                    aderencia_score=:aderencia_score,
+                    valor_score=:valor_score,
+                    risco_score=:risco_score,
+                    detail_status='done',
+                    last_detail_attempt=:last_detail_attempt,
+                    last_detail_error=NULL,
+                    updated_at=:updated_at
+                WHERE numero_controle_pncp=:numero_controle_pncp
+                """,
+                data,
+            )
+
+    def mark_detail_status(self, numero_controle_pncp: str, status: str, error: str | None = None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE opportunities SET detail_status=?, last_detail_attempt=?, last_detail_error=?, updated_at=? WHERE numero_controle_pncp=?",
+                (status, datetime.utcnow().isoformat(), error, datetime.utcnow().isoformat(), numero_controle_pncp),
+            )
+
+    def pending_detail_candidates(self, limit: int = 50):
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM opportunities
+                WHERE detail_status IN ('summary', 'retry')
+                  AND orgao_cnpj IS NOT NULL AND TRIM(orgao_cnpj) <> ''
+                  AND ano_compra IS NOT NULL
+                  AND sequencial_compra IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
 
     def create_sync_run(self, source: str, status: str = 'running', details: str = '') -> int:
         with self.connect() as conn:
@@ -265,11 +343,19 @@ class Database:
                   AND date(data_encerramento_proposta) BETWEEN date('now') AND date('now', '+2 day')
                 """
             ).fetchone()['n']
+            pending_details = conn.execute(
+                "SELECT COUNT(*) AS n FROM opportunities WHERE detail_status IN ('summary','retry')"
+            ).fetchone()['n']
+            detailed = conn.execute(
+                "SELECT COUNT(*) AS n FROM opportunities WHERE detail_status='done'"
+            ).fetchone()['n']
             return {
                 'total': total,
                 'latest': latest,
                 'open_now': open_now,
                 'urgent': urgent,
+                'pending_details': pending_details,
+                'detailed': detailed,
             }
 
     def distinct_values(self, column: str, table: str = 'opportunities'):
@@ -305,6 +391,6 @@ class Database:
         with self.connect() as conn:
             return conn.execute('SELECT * FROM alert_profiles WHERE ativo = 1 ORDER BY id DESC').fetchall()
 
-    def export_rows(self, query: str, params: tuple = ()):
+    def export_rows(self, query: str, params: tuple = ()): 
         with self.connect() as conn:
             return conn.execute(query, params).fetchall()
