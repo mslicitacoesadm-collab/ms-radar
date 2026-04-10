@@ -1,41 +1,33 @@
 from __future__ import annotations
 
 import argparse
-import json
 
-from app.core.alerts import process_alerts
-from app.core.config import load_settings
-from app.core.database import init_db, list_alerts, list_notices, log_sync, upsert_notices
-from app.core.pncp_client import PNCPClient
+from app.core.database import insert_sync_history, upsert_notices
+from app.core.pncp_client import fetch_open_notices, load_demo_notices
 
 
-
-def run_sync(query: str = "", days: int = 30) -> dict:
-    init_db()
-    client = PNCPClient()
-    settings = load_settings()
-
-    notices = client.search(query=query, days=days)
-    found, inserted = upsert_notices(notices)
-
-    alerts = [dict(row) for row in list_alerts()]
-    deliveries = process_alerts(alerts, notices)
-
-    mode = "api" if settings.pncp_search_url else "sample"
-    log_sync(mode=mode, query_used=query, items_found=found, items_inserted=inserted, status="ok", details=f"deliveries={len(deliveries)}")
-
-    return {
-        "mode": mode,
-        "found": found,
-        "inserted": inserted,
-        "deliveries": len(deliveries),
-    }
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Sincronização do Radar de Licitações")
-    parser.add_argument("--query", default="", help="Consulta base")
-    parser.add_argument("--days", default=30, type=int, help="Janela em dias")
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Sincroniza oportunidades do PNCP para a base local.')
+    parser.add_argument('--days', type=int, default=30)
+    parser.add_argument('--uf', type=str, default='')
+    parser.add_argument('--demo-fallback', action='store_true')
     args = parser.parse_args()
-    result = run_sync(query=args.query, days=args.days)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    try:
+        notices = fetch_open_notices(days_ahead=args.days, uf=args.uf)
+        imported = upsert_notices(notices)
+        insert_sync_history('pncp', imported, 'ok', f'UF={args.uf or "TODAS"}')
+        print(f'Importadas {imported} oportunidades do PNCP.')
+    except Exception as exc:
+        if args.demo_fallback:
+            notices = load_demo_notices()
+            imported = upsert_notices(notices)
+            insert_sync_history('demo', imported, 'fallback', str(exc))
+            print(f'Falha no PNCP. Base demo carregada com {imported} registros. Motivo: {exc}')
+        else:
+            insert_sync_history('pncp', 0, 'erro', str(exc))
+            raise
+
+
+if __name__ == '__main__':
+    main()
