@@ -1,0 +1,37 @@
+name: PNCP Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 */6 * * *'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run PNCP sync
+        env:
+          PNCP_TIMEOUT: '25'
+        run: |
+          python -m app.services.sync_job
+
+      - name: Commit database update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/*.db
+          git diff --cached --quiet || git commit -m "chore: atualiza base PNCP"
+          git push
