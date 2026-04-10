@@ -17,21 +17,15 @@ class Notice:
     publication_date: str
     deadline_date: str
     source_url: str
-    source_system: str = "PNCP"
-    raw_json: str = "{}"
-
-
-@dataclass
-class AlertProfile:
-    id: Optional[int]
-    name: str
-    keywords: str
-    state: str
-    city: str
-    modality: str
-    min_value: float
-    max_value: float
-    email: str
-    telegram_chat_id: str
-    is_active: int = 1
-
+    source_system: str
+    pncp_cnpj: str = ''
+    pncp_ano: int = 0
+    pncp_sequencial: int = 0
+    opening_date: str = ''
+    situation: str = ''
+    score: float = 0.0
+    urgency_score: float = 0.0
+    fit_score: float = 0.0
+    opportunity_score: float = 0.0
+    match_reason: str = ''
+    raw_json: Optional[str] = None

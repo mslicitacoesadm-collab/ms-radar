@@ -1,133 +1,97 @@
 from __future__ import annotations
 
 import math
-import re
-import unicodedata
-from typing import Dict, Iterable, List
+from datetime import datetime
+from typing import Iterable
 
 import pandas as pd
 
-
-SEMANTIC_MAP = {
-    "material de limpeza": ["limpeza", "higiene", "saneante", "descartavel", "descartáveis"],
-    "merenda": ["alimenticio", "gêneros alimentícios", "generos alimenticios", "alimentação escolar", "merenda escolar"],
-    "combustivel": ["gasolina", "diesel", "etanol", "lubrificante", "combustíveis"],
-    "material grafico": ["gráfico", "impressão", "gráfica", "folder", "panfleto", "banner"],
-    "medicamento": ["farmaceutico", "insumo hospitalar", "medicamentos", "material hospitalar"],
-    "transporte escolar": ["ônibus", "micro-ônibus", "rota escolar", "locação de veículos"],
-    "construcao": ["engenharia", "obra", "reforma", "manutenção predial", "serviço de engenharia"],
-    "software": ["sistema", "licenciamento", "tecnologia", "suporte técnico", "plataforma"],
+SYNONYMS = {
+    'material grafico': ['grafico', 'impressos', 'papelaria'],
+    'combustivel': ['gasolina', 'diesel', 'lubrificante'],
+    'merenda': ['alimenticios', 'gêneros', 'escolar'],
+    'limpeza': ['higiene', 'saneantes', 'descartáveis'],
+    'engenharia': ['obra', 'reforma', 'construção'],
+    'software': ['sistema', 'licenciamento', 'implantação'],
 }
 
 
-def normalize_text(text: str) -> str:
-    text = text or ""
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(c for c in text if not unicodedata.combining(c))
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+def _tokenize(text: str) -> list[str]:
+    cleaned = ''.join(ch.lower() if ch.isalnum() or ch.isspace() else ' ' for ch in (text or ''))
+    return [t for t in cleaned.split() if len(t) > 1]
 
 
-
-def expand_query(query: str) -> List[str]:
-    q = normalize_text(query)
-    terms = [t for t in q.split() if len(t) > 1]
-    expanded = list(terms)
-
-    for base_term, synonyms in SEMANTIC_MAP.items():
-        normalized_base = normalize_text(base_term)
-        if normalized_base in q or any(term in normalized_base for term in terms):
-            expanded.extend(normalize_text(s).split() for s in synonyms)
-
-    flattened: List[str] = []
-    for item in expanded:
-        if isinstance(item, list):
-            flattened.extend(item)
-        else:
-            flattened.append(item)
-
-    return list(dict.fromkeys(flattened))
+def _expanded_terms(query: str) -> set[str]:
+    terms = set(_tokenize(query))
+    normalized = ' '.join(sorted(terms))
+    for key, values in SYNONYMS.items():
+        if any(k in query.lower() for k in key.split()):
+            terms.update(values)
+    if 'ti' in terms:
+        terms.update(['software', 'sistema', 'tecnologia'])
+    return terms
 
 
+def score_row(row: pd.Series, query: str, profile_terms: set[str] | None = None) -> dict[str, float | str]:
+    text = ' '.join([
+        str(row.get('title', '')),
+        str(row.get('object_text', '')),
+        str(row.get('agency', '')),
+        str(row.get('city', '')),
+        str(row.get('modality', '')),
+    ]).lower()
+    tokens = set(_tokenize(text))
+    q_terms = _expanded_terms(query)
+    if profile_terms:
+        q_terms |= profile_terms
 
-def compute_score(record: Dict, query: str) -> float:
-    base = normalize_text(
-        " ".join(
-            [
-                str(record.get("title", "")),
-                str(record.get("object_text", "")),
-                str(record.get("agency", "")),
-                str(record.get("city", "")),
-                str(record.get("state", "")),
-                str(record.get("modality", "")),
-            ]
-        )
-    )
-    if not query.strip():
-        freshness_bonus = 6.0 if record.get("deadline_date") else 2.0
-        return freshness_bonus
+    matches = len(tokens & q_terms)
+    base_score = matches / max(len(q_terms), 1)
 
-    terms = expand_query(query)
-    score = 0.0
+    estimated = float(row.get('estimated_value', 0) or 0)
+    value_score = min(math.log10(estimated + 1) / 7, 1.0)
 
-    for term in terms:
-        if term and term in base:
-            score += 8.0
+    deadline_score = 0.3
+    deadline = str(row.get('deadline_date', '') or '')
+    if deadline:
+        try:
+            days = (datetime.fromisoformat(deadline) - datetime.now()).days
+            if days <= 2:
+                deadline_score = 1.0
+            elif days <= 7:
+                deadline_score = 0.8
+            elif days <= 15:
+                deadline_score = 0.6
+            else:
+                deadline_score = 0.35
+        except ValueError:
+            pass
 
-    whole_query = normalize_text(query)
-    if whole_query and whole_query in base:
-        score += 18.0
+    fit_score = min(1.0, base_score * 1.3)
+    opportunity = round((fit_score * 0.5 + value_score * 0.3 + deadline_score * 0.2) * 100, 1)
 
-    title = normalize_text(str(record.get("title", "")))
-    if whole_query and whole_query in title:
-        score += 10.0
+    if matches >= 3:
+        reason = 'Alta aderência ao objeto pesquisado'
+    elif matches == 2:
+        reason = 'Boa aderência semântica'
+    elif matches == 1:
+        reason = 'Correspondência parcial relevante'
+    else:
+        reason = 'Encontrado por filtros estruturados'
 
-    value = float(record.get("estimated_value") or 0)
-    if value >= 100000:
-        score += min(10.0, math.log10(value + 1))
-
-    if str(record.get("deadline_date", "")).strip():
-        score += 4.0
-
-    return round(score, 2)
-
+    return {
+        'score': round(base_score * 100, 1),
+        'fit_score': round(fit_score * 100, 1),
+        'urgency_score': round(deadline_score * 100, 1),
+        'opportunity_score': opportunity,
+        'match_reason': reason,
+    }
 
 
-def filter_and_rank(df: pd.DataFrame, query: str, state: str, city: str, modality: str, min_value: float, max_value: float) -> pd.DataFrame:
+def apply_scoring(df: pd.DataFrame, query: str, profile_terms: set[str] | None = None) -> pd.DataFrame:
     if df.empty:
         return df
-
-    work = df.copy()
-
-    if state:
-        work = work[work["state"].fillna("").str.upper() == state.upper()]
-    if city:
-        work = work[work["city"].fillna("").str.contains(city, case=False, na=False)]
-    if modality:
-        work = work[work["modality"].fillna("").str.contains(modality, case=False, na=False)]
-    if min_value > 0:
-        work = work[pd.to_numeric(work["estimated_value"], errors="coerce").fillna(0) >= min_value]
-    if max_value > 0:
-        work = work[pd.to_numeric(work["estimated_value"], errors="coerce").fillna(0) <= max_value]
-
-    work["score"] = work.apply(lambda row: compute_score(row.to_dict(), query), axis=1)
-
-    if query.strip():
-        work = work[work["score"] > 0]
-
-    work = work.sort_values(by=["score", "deadline_date", "publication_date"], ascending=[False, False, False])
-    return work
-
-
-
-def priority_label(score: float) -> str:
-    if score >= 50:
-        return "Alta"
-    if score >= 25:
-        return "Boa"
-    if score >= 10:
-        return "Moderada"
-    return "Base"
-
+    scored = [score_row(row, query, profile_terms) for _, row in df.iterrows()]
+    score_df = pd.DataFrame(scored)
+    out = pd.concat([df.reset_index(drop=True), score_df], axis=1)
+    return out.sort_values(['opportunity_score', 'fit_score', 'estimated_value'], ascending=[False, False, False])
