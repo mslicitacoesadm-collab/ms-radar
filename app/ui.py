@@ -1,107 +1,87 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime
-
+import pandas as pd
 import streamlit as st
+
+from app.core.utils import money
+
+
+def set_page(title: str, icon: str = '🎯') -> None:
+    st.set_page_config(page_title=title, page_icon=icon, layout='wide', initial_sidebar_state='expanded')
+    inject_css()
 
 
 def inject_css() -> None:
     st.markdown(
-        '''
+        """
         <style>
-        .block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1240px;}
-        .hero-card, .metric-card, .result-card {
-            background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-            border: 1px solid rgba(20,71,230,.10);
-            border-radius: 22px;
-            padding: 1.1rem 1.2rem;
-            box-shadow: 0 10px 30px rgba(15,23,42,.06);
+        .block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
+        .hero {
+            background: linear-gradient(135deg, #0f172a 0%, #134e4a 55%, #0f766e 100%);
+            border-radius: 24px; color: white; padding: 28px 32px; margin-bottom: 18px;
+            box-shadow: 0 18px 40px rgba(15, 23, 42, .16);
         }
-        .metric-value {font-size: 1.7rem; font-weight: 700; color: #0f172a;}
-        .metric-label {font-size: .92rem; color: #475569;}
-        .pill {
-            display:inline-block; padding:.28rem .6rem; border-radius:999px; font-size:.78rem;
-            background:#e8f0ff; color:#1447e6; border:1px solid rgba(20,71,230,.12); margin-right:.3rem;
+        .hero h1 {margin: 0; font-size: 2rem;}
+        .hero p {margin: .35rem 0 0 0; opacity: .92;}
+        .kpi {
+            background: white; border: 1px solid #e2e8f0; border-radius: 22px;
+            padding: 18px; box-shadow: 0 8px 24px rgba(15,23,42,.05);
         }
-        .score-pill {
-            display:inline-block; padding:.3rem .55rem; border-radius:999px; font-size:.78rem;
-            background:#0f172a; color:white; margin-right:.35rem;
+        .kpi .label {font-size: .85rem; color:#64748b;}
+        .kpi .value {font-size: 1.6rem; font-weight: 700; color:#0f172a;}
+        .pill {display:inline-block; padding: .22rem .6rem; border-radius: 999px; background:#ecfeff; color:#155e75; font-size:.8rem; margin-right:.35rem;}
+        .card {
+            background:white; border:1px solid #e2e8f0; border-radius:22px; padding:18px; margin-bottom:14px;
+            box-shadow: 0 10px 26px rgba(15,23,42,.05);
         }
-        .soft {color:#475569; font-size:.94rem}
-        .title-strong {font-size: 1.05rem; font-weight: 700; color:#0f172a; margin-bottom:.2rem;}
-        .section-title {font-size:1.05rem; font-weight:700; color:#0f172a; margin:.2rem 0 .7rem 0;}
+        .score {font-size: 1.5rem; font-weight:700; color:#0f766e;}
+        .muted {color:#64748b; font-size:.92rem;}
         </style>
-        ''',
+        """,
         unsafe_allow_html=True,
     )
 
 
-def hero(title: str, subtitle: str, badges: list[str] | None = None) -> None:
-    badges_html = ''.join(f'<span class="pill">{b}</span>' for b in (badges or []))
+def hero(title: str, subtitle: str) -> None:
+    st.markdown(f"<div class='hero'><h1>{title}</h1><p>{subtitle}</p></div>", unsafe_allow_html=True)
+
+
+def kpi(label: str, value: str, help_text: str = '') -> None:
     st.markdown(
-        f'''
-        <div class="hero-card">
-            <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;flex-wrap:wrap;">
-                <div style="max-width:840px;">
-                    <div style="font-size:2rem;font-weight:800;line-height:1.1;color:#0f172a;">{title}</div>
-                    <div class="soft" style="margin-top:.5rem;">{subtitle}</div>
-                    <div style="margin-top:.8rem;">{badges_html}</div>
-                </div>
-            </div>
-        </div>
-        ''',
+        f"<div class='kpi'><div class='label'>{label}</div><div class='value'>{value}</div><div class='muted'>{help_text}</div></div>",
         unsafe_allow_html=True,
     )
 
 
-def metric_card(label: str, value: str, help_text: str = '') -> None:
-    st.markdown(
-        f'''
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="soft">{help_text}</div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
+def opportunity_card(row: dict) -> None:
+    score = row.get('oportunidade_score', 0)
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    c1, c2 = st.columns([5, 1.3])
+    with c1:
+        st.markdown(f"### {row.get('resumo_objeto') or row.get('objeto_compra')}")
+        st.caption(f"{row.get('orgao_razao_social','')} · {row.get('municipio_nome','')} / {row.get('uf_sigla','')}")
+        chips = [
+            row.get('modalidade_nome') or 'Modalidade não informada',
+            f"Encerra: {str(row.get('data_encerramento_proposta') or '—')[:10]}",
+            f"Valor: {money(row.get('valor_total_estimado'))}",
+        ]
+        st.markdown(' '.join([f"<span class='pill'>{chip}</span>" for chip in chips]), unsafe_allow_html=True)
+        st.write(row.get('objeto_compra') or 'Sem descrição disponível.')
+        links = []
+        if row.get('link_sistema_origem'):
+            links.append(f"[Sistema de origem]({row['link_sistema_origem']})")
+        if row.get('link_processo_eletronico'):
+            links.append(f"[Processo eletrônico]({row['link_processo_eletronico']})")
+        if links:
+            st.markdown(' · '.join(links))
+        st.caption(f"PNCP: {row.get('numero_controle_pncp')} · Processo: {row.get('processo') or '—'}")
+    with c2:
+        st.markdown(f"<div class='score'>{score:.0f}</div><div class='muted'>score</div>", unsafe_allow_html=True)
+        st.metric('Urgência', f"{row.get('urgencia_score', 0):.0f}")
+        st.metric('Aderência', f"{row.get('aderencia_score', 0):.0f}")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-def result_card(row) -> None:
-    value = f"R$ {float(row.get('estimated_value', 0) or 0):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-    st.markdown(
-        f'''
-        <div class="result-card">
-            <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;flex-wrap:wrap;">
-                <div style="flex:1;min-width:280px;">
-                    <div class="title-strong">{row.get('title','')}</div>
-                    <div class="soft" style="margin-bottom:.5rem;">{row.get('agency','')} · {row.get('city','')} / {row.get('state','')}</div>
-                    <div style="margin-bottom:.45rem;">
-                        <span class="pill">{row.get('modality','')}</span>
-                        <span class="pill">Prazo: {row.get('deadline_date','-')}</span>
-                        <span class="pill">Publicação: {row.get('publication_date','-')}</span>
-                    </div>
-                    <div class="soft">{row.get('object_text','')}</div>
-                </div>
-                <div style="min-width:210px;">
-                    <div style="margin-bottom:.45rem;">
-                        <span class="score-pill">Oportunidade {row.get('opportunity_score',0)}</span>
-                        <span class="score-pill">Fit {row.get('fit_score',0)}</span>
-                    </div>
-                    <div class="soft"><strong>Valor estimado:</strong> {value}</div>
-                    <div class="soft"><strong>Motivo:</strong> {row.get('match_reason','')}</div>
-                </div>
-            </div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
-
-
-def format_brl(value: float) -> str:
-    return f"R$ {float(value or 0):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-
-
-def json_download_button(data: dict, filename: str, label: str) -> None:
-    st.download_button(label, data=json.dumps(data, ensure_ascii=False, indent=2), file_name=filename, mime='application/json')
+def rows_to_df(rows) -> pd.DataFrame:
+    data = [dict(r) if not isinstance(r, dict) else r for r in rows]
+    return pd.DataFrame(data)
