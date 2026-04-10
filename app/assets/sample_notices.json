@@ -1,0 +1,57 @@
+[
+  {
+    "numeroControlePNCP": "demo-001",
+    "objetoCompra": "Registro de preços para aquisição de material de limpeza e higiene para atender unidades administrativas.",
+    "orgaoEntidade": {"razaoSocial": "Prefeitura Municipal de Barreiras"},
+    "unidadeOrgao": {"ufSigla": "BA", "municipioNome": "Barreiras"},
+    "modalidadeNome": "Pregão Eletrônico",
+    "valorTotalEstimado": 485000.90,
+    "dataPublicacaoPncp": "2026-04-02",
+    "dataEncerramentoProposta": "2026-04-15",
+    "linkSistemaOrigem": "https://pncp.gov.br"
+  },
+  {
+    "numeroControlePNCP": "demo-002",
+    "objetoCompra": "Contratação de empresa especializada para fornecimento parcelado de combustíveis, incluindo gasolina comum, diesel S10 e lubrificantes.",
+    "orgaoEntidade": {"razaoSocial": "Município de Salvador"},
+    "unidadeOrgao": {"ufSigla": "BA", "municipioNome": "Salvador"},
+    "modalidadeNome": "Pregão Eletrônico",
+    "valorTotalEstimado": 1350000,
+    "dataPublicacaoPncp": "2026-04-05",
+    "dataEncerramentoProposta": "2026-04-18",
+    "linkSistemaOrigem": "https://pncp.gov.br"
+  },
+  {
+    "numeroControlePNCP": "demo-003",
+    "objetoCompra": "Aquisição de gêneros alimentícios para composição da merenda escolar do exercício de 2026.",
+    "orgaoEntidade": {"razaoSocial": "Prefeitura Municipal de Correntina"},
+    "unidadeOrgao": {"ufSigla": "BA", "municipioNome": "Correntina"},
+    "modalidadeNome": "Concorrência",
+    "valorTotalEstimado": 890000,
+    "dataPublicacaoPncp": "2026-03-29",
+    "dataEncerramentoProposta": "2026-04-14",
+    "linkSistemaOrigem": "https://pncp.gov.br"
+  },
+  {
+    "numeroControlePNCP": "demo-004",
+    "objetoCompra": "Prestação de serviços técnicos continuados de licenciamento de software, implantação, treinamento e suporte técnico.",
+    "orgaoEntidade": {"razaoSocial": "Câmara Municipal de Irecê"},
+    "unidadeOrgao": {"ufSigla": "BA", "municipioNome": "Irecê"},
+    "modalidadeNome": "Dispensa",
+    "valorTotalEstimado": 78000,
+    "dataPublicacaoPncp": "2026-04-04",
+    "dataEncerramentoProposta": "2026-04-10",
+    "linkSistemaOrigem": "https://pncp.gov.br"
+  },
+  {
+    "numeroControlePNCP": "demo-005",
+    "objetoCompra": "Execução de reforma de unidades escolares com fornecimento de materiais, mão de obra e gerenciamento técnico.",
+    "orgaoEntidade": {"razaoSocial": "Prefeitura Municipal de Xique-Xique"},
+    "unidadeOrgao": {"ufSigla": "BA", "municipioNome": "Xique-Xique"},
+    "modalidadeNome": "Concorrência",
+    "valorTotalEstimado": 2245000,
+    "dataPublicacaoPncp": "2026-04-01",
+    "dataEncerramentoProposta": "2026-04-25",
+    "linkSistemaOrigem": "https://pncp.gov.br"
+  }
+]
