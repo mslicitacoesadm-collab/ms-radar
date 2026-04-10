@@ -1,53 +1,42 @@
-# Radar Inteligente de Licitações
+# Radar Licita Pro
 
-Aplicação em Streamlit para busca inteligente de licitações, operação com base local SQLite, filtros comerciais e cadastro de alertas.
+Versão profissional em Streamlit para busca simples, operação rápida e centro de alertas de licitações.
 
-## O que já funciona
+## O que esta versão entrega
 
-- busca local com score de relevância
-- sincronização real com a API de consultas do PNCP
-- carga de base demo para apresentação
-- importação manual de JSON externo
-- cadastro de alertas na base SQLite
-- envio de alertas por e-mail e Telegram
-- workflow do GitHub Actions para atualizar a base
-
-## Base técnica PNCP
-
-A integração foi ajustada com base na documentação oficial do PNCP:
-
-- URL base de serviços: `https://pncp.gov.br/api/consulta`
-- endpoint de consultas com propostas abertas: `/v1/contratacoes/proposta`
-- endpoint de detalhe da contratação: `/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}`
+- interface mais limpa e comercial
+- busca inteligente com score de aderência e oportunidade
+- radar diário com priorização por urgência, valor e fit
+- central de alertas com cadastro simples
+- painel de operação para sincronizar, importar e exportar
+- integração com a API de consultas do PNCP
+- workflow pronto para GitHub Actions
 
 ## Estrutura
 
 ```text
 app.py
+pages/
+  1_Busca_Inteligente.py
+  2_Radar_Diario.py
+  3_Central_de_Alertas.py
+  4_Operacao_e_Base.py
 app/
-  assets/sample_notices.json
   core/
-    alerts.py
-    config.py
-    database.py
-    models.py
-    pncp_client.py
-    search_engine.py
   services/
-    sync_job.py
-.github/workflows/sync_alerts.yml
+  assets/
+.github/workflows/
 data/
-requirements.txt
 ```
 
-## Rodando localmente
+## Rodar localmente
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Secrets recomendados no Streamlit e no GitHub
+## Secrets recomendados
 
 ```toml
 PNCP_SEARCH_URL="https://pncp.gov.br/api/consulta"
@@ -55,28 +44,28 @@ PNCP_TIMEOUT="25"
 SMTP_HOST="smtp.gmail.com"
 SMTP_PORT="587"
 SMTP_USER="seu-email@gmail.com"
-SMTP_PASSWORD="senha-ou-app-password"
+SMTP_PASSWORD="sua-senha-ou-app-password"
 SMTP_FROM="seu-email@gmail.com"
 TELEGRAM_BOT_TOKEN="123456:ABCDEF"
 TELEGRAM_CHAT_ID="123456789"
 ```
 
-## Deploy no GitHub + Streamlit
+## Rotina ideal
 
-1. Suba todo o projeto para um repositório GitHub.
-2. No Streamlit Community Cloud, crie um app apontando para `app.py`.
-3. Cadastre os mesmos secrets acima no painel do Streamlit.
-4. No GitHub, habilite Actions e adicione os mesmos secrets no repositório.
-5. Execute o workflow `Sincronizar radar de licitações` manualmente na primeira vez.
+1. Subir o projeto no GitHub.
+2. Criar o app no Streamlit apontando para `app.py`.
+3. Configurar os secrets no Streamlit.
+4. Habilitar GitHub Actions e cadastrar os mesmos secrets.
+5. Rodar manualmente o workflow na primeira vez.
+6. Usar a tela inicial para validar base demo ou sincronização do PNCP.
 
-## Observação importante sobre persistência
+## Observação técnica
 
-No modelo GitHub + Streamlit Community Cloud, o banco SQLite é excelente para MVP e operação simples, mas a persistência do arquivo no app depende do ambiente do Streamlit. Por isso o workflow do GitHub também salva o banco no repositório, permitindo manter uma base atualizada para novas execuções.
+A integração foi preparada com base na documentação de consultas do PNCP: URL base `https://pncp.gov.br/api/consulta`, endpoint de oportunidades abertas `/v1/contratacoes/proposta` e consulta de detalhe da contratação em `/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}`.
 
-## Próximas evoluções sugeridas
+## Próxima camada premium
 
-- detalhe completo da contratação na interface
-- resumo automático do edital
-- score de oportunidade comercial
-- leitura de risco jurídico
-- integração com geração de impugnação, recurso e contrarrazão
+- leitura de risco do edital
+- score comercial por nicho
+- resumo executivo pronto para equipe de vendas
+- integração com módulo jurídico
