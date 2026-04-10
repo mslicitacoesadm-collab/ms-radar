@@ -1,35 +1,47 @@
 from __future__ import annotations
 
-import smtplib
-from email.message import EmailMessage
+from typing import Any
 
-import requests
-
-from .config import SETTINGS
-from .database import log_delivery
+from app.core.database import Database
 
 
-def send_email_alert(to_email: str, subject: str, body: str) -> tuple[bool, str]:
-    if not (SETTINGS.smtp_host and SETTINGS.smtp_user and SETTINGS.smtp_password and SETTINGS.smtp_from and to_email):
-        return False, 'SMTP não configurado.'
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = SETTINGS.smtp_from
-    msg['To'] = to_email
-    msg.set_content(body)
-    with smtplib.SMTP(SETTINGS.smtp_host, SETTINGS.smtp_port, timeout=20) as smtp:
-        smtp.starttls()
-        smtp.login(SETTINGS.smtp_user, SETTINGS.smtp_password)
-        smtp.send_message(msg)
-    return True, 'E-mail enviado.'
-
-
-def send_telegram_alert(chat_id: str, body: str) -> tuple[bool, str]:
-    token = SETTINGS.telegram_bot_token
-    dest = chat_id or SETTINGS.telegram_chat_id
-    if not (token and dest):
-        return False, 'Telegram não configurado.'
-    url = f'https://api.telegram.org/bot{token}/sendMessage'
-    response = requests.post(url, json={'chat_id': dest, 'text': body}, timeout=20)
-    response.raise_for_status()
-    return True, 'Mensagem enviada.'
+def evaluate_alerts(limit_per_alert: int = 30) -> dict[str, Any]:
+    db = Database()
+    alerts = db.list_alert_profiles()
+    report: list[dict[str, Any]] = []
+    with db.connect() as conn:
+        for alert in alerts:
+            terms = [term.strip() for term in (alert['termos'] or '').split(',') if term.strip()]
+            where = []
+            params: list[Any] = []
+            if terms:
+                sub = []
+                for term in terms:
+                    sub.append('search_blob LIKE ?')
+                    params.append(f'%{term}%')
+                where.append('(' + ' OR '.join(sub) + ')')
+            if alert['uf_sigla']:
+                where.append('uf_sigla = ?')
+                params.append(alert['uf_sigla'])
+            if alert['municipio_nome']:
+                where.append('municipio_nome = ?')
+                params.append(alert['municipio_nome'])
+            if alert['modalidade_codigo']:
+                where.append('modalidade_codigo = ?')
+                params.append(alert['modalidade_codigo'])
+            if alert['valor_min'] is not None:
+                where.append('valor_total_estimado >= ?')
+                params.append(alert['valor_min'])
+            if alert['valor_max'] is not None:
+                where.append('valor_total_estimado <= ?')
+                params.append(alert['valor_max'])
+            if alert['somente_abertas']:
+                where.append("date(data_encerramento_proposta) >= date('now')")
+            sql = 'SELECT * FROM opportunities'
+            if where:
+                sql += ' WHERE ' + ' AND '.join(where)
+            sql += ' ORDER BY oportunidade_score DESC, data_encerramento_proposta ASC LIMIT ?'
+            params.append(limit_per_alert)
+            rows = conn.execute(sql, params).fetchall()
+            report.append({'alerta': dict(alert), 'matches': [dict(r) for r in rows], 'total_matches': len(rows)})
+    return {'alerts': report}
