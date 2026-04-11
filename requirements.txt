@@ -1,3 +1,5 @@
 streamlit>=1.39
 pandas>=2.2
 requests>=2.32
+fastapi>=0.115
+uvicorn>=0.32

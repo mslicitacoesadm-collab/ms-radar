@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from urllib.parse import quote_plus
 
 import streamlit as st
 
-from core.monetizacao import FREE_PREVIEW_LIMIT, ensure_state, obfuscate_items, premium_active, reset_access, unlock_premium
+from core import mercadopago
+from core.access import FREE_PREVIEW_LIMIT, obfuscate_items, register_checkout, sync_email_subscription
+from core.auth import ensure_user, get_user_email, valid_email
 from core.pncp import (
     FAST_HOME_MODALIDADES,
     MAX_HOME_ITEMS,
@@ -23,59 +24,118 @@ from core.pncp import (
     render_cards,
     setup_page,
     test_connection,
-    top_by_niche,
     top_by_state,
 )
+from core.storage import init_db
 
-setup_page('MS Radar V8', '📡')
-ensure_state()
-
+setup_page('MS Radar V10', '📡')
+init_db()
 logo_path = Path(__file__).parent / 'assets' / 'logo_ms_radar.png'
 logo_b64 = base64.b64encode(logo_path.read_bytes()).decode()
 
 if 'refresh_nonce' not in st.session_state:
     st.session_state.refresh_nonce = 0
 
+email_from_query = st.query_params.get('email')
+if email_from_query and 'user_email' not in st.session_state and valid_email(str(email_from_query)):
+    st.session_state['user_email'] = str(email_from_query).lower()
+
 conn = test_connection()
 status = f"Conexão ativa com o PNCP • ~{conn['latency_ms']} ms" if conn.get('ok') else 'Conexão instável com o PNCP agora'
-premium = premium_active()
+
+user_email = get_user_email()
+active_sub = None
+subs = []
+sync_error = None
+if user_email:
+    active_sub, subs, sync_error = sync_email_subscription(user_email)
+
+premium = bool(active_sub)
+checkout_notice = ''
+if st.query_params.get('checkout') == 'retorno' and user_email:
+    checkout_notice = 'Retorno do checkout detectado. O MS Radar já validou sua assinatura automaticamente.'
 
 hero = f'''
 <div class="hero">
   <div class="hero-top">
-    <span class="ribbon">MS Radar • V8 monetização direta</span>
+    <span class="ribbon">MS Radar • V10 assinatura recorrente</span>
     <span class="ribbon">PNCP em tempo real • sem banco de licitações</span>
-    <span class="ribbon">Prévia gratuita com bloqueio leve</span>
+    <span class="ribbon">Mercado Pago • cobrança recorrente</span>
   </div>
   <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;margin-top:12px;">
     <img src="data:image/png;base64,{logo_b64}" style="width:190px;border-radius:16px;" />
     <div>
-      <h1>MS Radar V8: vitrine comercial rápida, leitura clara e monetização leve sem armazenamento persistente de licitações</h1>
-      <p>Esta versão foi revisada para funcionar como uma entrada premium do PNCP: carrega rápido, concentra toda a navegação na página principal e demonstra monetização por prévia gratuita, sem ainda depender de checkout externo.</p>
+      <h1>MS Radar V10: produto recorrente com acesso premium automático, sem perder a velocidade da vitrine principal</h1>
+      <p>Esta versão separa duas camadas: licitações continuam em modo espelho, sem armazenamento persistente, e a monetização passa a ter controle próprio para assinatura recorrente, liberação automática e renovação via Mercado Pago.</p>
       <p class="note-line">{status}</p>
+      {f'<p class="note-line">{checkout_notice}</p>' if checkout_notice else ''}
     </div>
   </div>
 </div>
 '''
 st.markdown(hero, unsafe_allow_html=True)
 
-st.markdown('<div class="section-title">Camada de monetização</div>', unsafe_allow_html=True)
-m1, m2, m3 = st.columns([1.2, 1, 1])
-with m1:
-    msg = 'Acesso premium liberado nesta sessão.' if premium else f'Prévia gratuita com {FREE_PREVIEW_LIMIT} oportunidades completas por vitrine.'
-    st.markdown(f'<div class="kpi"><div class="label">Status do acesso</div><div class="value">{"Premium" if premium else "Prévia"}</div><div class="note">{msg}</div></div>', unsafe_allow_html=True)
-with m2:
-    st.markdown('<div class="kpi"><div class="label">Estratégia</div><div class="value">Paywall leve</div><div class="note">A V8 demonstra valor mostrando parte das oportunidades e ocultando o restante.</div></div>', unsafe_allow_html=True)
-with m3:
-    if premium:
-        if st.button('Voltar para modo prévia', use_container_width=True):
-            reset_access()
-            st.rerun()
+st.markdown('<div class="section-title">Acesso do assinante</div>', unsafe_allow_html=True)
+left, right = st.columns([1.2, 1])
+with left:
+    with st.form('login-form', clear_on_submit=False):
+        email_input = st.text_input('Seu e-mail de acesso', value=user_email or '', placeholder='voce@empresa.com.br')
+        submitted = st.form_submit_button('Entrar / atualizar acesso', use_container_width=True)
+        if submitted:
+            try:
+                user_email = ensure_user(email_input)
+                active_sub, subs, sync_error = sync_email_subscription(user_email)
+                premium = bool(active_sub)
+                st.success('Acesso identificado com sucesso.')
+            except Exception as exc:
+                st.error(str(exc))
+with right:
+    if user_email:
+        plan_text = 'Assinatura premium ativa' if premium else 'Modo demonstração / gratuito'
+        note = f"Plano: {active_sub.get('plan_code','premium')} • status {active_sub.get('status')}" if premium else f"Prévia liberada com {FREE_PREVIEW_LIMIT} oportunidades completas antes do bloqueio leve."
+        st.markdown(f'<div class="kpi"><div class="label">Status de acesso</div><div class="value">{plan_text}</div><div class="note">{note}</div></div>', unsafe_allow_html=True)
     else:
-        if st.button('Simular desbloqueio premium', use_container_width=True):
-            unlock_premium()
-            st.rerun()
+        st.markdown('<div class="kpi"><div class="label">Status de acesso</div><div class="value">Identifique-se</div><div class="note">Digite seu e-mail para liberar checkout, validar assinatura e manter o acesso recorrente.</div></div>', unsafe_allow_html=True)
 
+if sync_error:
+    st.warning(f'Não foi possível validar uma assinatura agora: {sync_error}')
+
+st.markdown('<div class="section-title">Planos recorrentes</div>', unsafe_allow_html=True)
+plans_cols = st.columns(2)
+for idx, code in enumerate(['mensal', 'anual']):
+    plan = mercadopago.PLANS[code]
+    with plans_cols[idx]:
+        st.markdown(
+            f'''<div class="surface">
+<strong>{plan.name}</strong>
+<div style="font-size:2rem;font-weight:900;margin-top:8px;">{money_br(plan.amount)}</div>
+<div class="small" style="margin-top:4px;">Cobrança recorrente a cada {plan.frequency} {plan.frequency_type}</div>
+<ul>
+<li>Busca avançada ampliada</li>
+<li>Vitrine completa sem bloqueio</li>
+<li>Validação automática do acesso</li>
+<li>Renovação recorrente via Mercado Pago</li>
+</ul>
+</div>''',
+            unsafe_allow_html=True,
+        )
+        disabled = (not user_email) or (not mercadopago.configured())
+        if st.button(f'Assinar {plan.name}', key=f'assinar-{code}', use_container_width=True, disabled=disabled):
+            try:
+                checkout = register_checkout(user_email, code)
+                link = checkout.get('init_point') or checkout.get('sandbox_init_point')
+                if link:
+                    st.markdown(f'<div class="cta-box"><strong>Checkout criado.</strong><div class="small" style="margin-top:8px;">Abra o link abaixo para concluir a assinatura e, ao retornar, o sistema validará seu acesso automaticamente.</div><div style="margin-top:12px;"><a class="btn-link" href="{link}" target="_blank">Abrir checkout do Mercado Pago</a></div></div>', unsafe_allow_html=True)
+                else:
+                    st.success('Assinatura criada, mas o link de checkout não foi retornado. Verifique o payload do Mercado Pago.')
+            except Exception as exc:
+                st.error(f'Falha ao criar checkout: {exc}')
+
+if not mercadopago.configured():
+    st.info('Configure MP_ACCESS_TOKEN e PUBLIC_APP_URL em variáveis de ambiente ou st.secrets para ativar a assinatura recorrente.')
+
+st.markdown('<div class="section-title">Painel principal do radar</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-sub">A vitrine continua rápida. O que muda no V10 é a camada de acesso recorrente, não a filosofia de espelho do PNCP.</div>', unsafe_allow_html=True)
 with st.container():
     f1, f2, f3, f4, f5 = st.columns([1.35, 0.8, 1.1, 1.5, 0.8])
     with f1:
@@ -103,7 +163,7 @@ with st.spinner('Carregando vitrine principal do MS Radar...'):
         page_size=10,
     )[:MAX_HOME_ITEMS]
 
-render_feed = obfuscate_items(home_feed)
+render_feed = obfuscate_items(home_feed, premium)
 urgentes = filter_urgent(home_feed)
 alto_valor = filter_high_value(home_feed)
 feed_bahia = top_by_state(home_feed, 'BA', limit=6)
@@ -125,73 +185,37 @@ left, right = st.columns([1.45, 0.55])
 with left:
     render_cards(render_feed, columns=3)
 with right:
-    st.markdown('<div class="cta-box"><strong>Mensagem comercial pronta</strong><div class="small" style="margin-top:8px;">O MS Radar consulta o PNCP em tempo real e transforma dados brutos em uma vitrine rápida, clara e comercialmente útil.</div></div>', unsafe_allow_html=True)
     if premium:
-        st.markdown('<div class="cta-box"><strong>Acesso premium liberado</strong><div class="small" style="margin-top:8px;">Nesta revisão da V8, o premium é simulado para validar a experiência comercial antes de integrar pagamento real.</div></div>', unsafe_allow_html=True)
-        export_items = home_feed
+        st.markdown('<div class="cta-box"><strong>Acesso premium liberado</strong><div class="small" style="margin-top:8px;">Você vê a vitrine completa e a assinatura seguirá renovando pelo Mercado Pago enquanto estiver ativa.</div></div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="cta-box"><strong>Prévia gratuita ativa</strong><div class="small" style="margin-top:8px;">Você está vendo {FREE_PREVIEW_LIMIT} oportunidades completas nesta vitrine. As próximas foram ocultadas para demonstrar a camada de monetização.</div></div>', unsafe_allow_html=True)
-        export_items = home_feed[:FREE_PREVIEW_LIMIT]
-    if export_items:
-        csv = export_df(export_items).to_csv(index=False).encode('utf-8-sig')
-        st.download_button('Baixar CSV disponível no plano atual', data=csv, file_name='ms_radar_vitrine_v8.csv', mime='text/csv', use_container_width=True)
+        st.markdown(f'<div class="cta-box"><strong>Prévia gratuita ativa</strong><div class="small" style="margin-top:8px;">Você está vendo {FREE_PREVIEW_LIMIT} oportunidades completas. Para liberar a vitrine integral e a busca avançada ampliada, ative uma assinatura recorrente.</div></div>', unsafe_allow_html=True)
+    if home_feed:
+        csv = export_df(home_feed if premium else home_feed[:FREE_PREVIEW_LIMIT]).to_csv(index=False).encode('utf-8-sig')
+        st.download_button('Baixar CSV disponível no seu plano', data=csv, file_name='ms_radar_vitrine.csv', mime='text/csv', use_container_width=True)
 
 if not premium and len(home_feed) > FREE_PREVIEW_LIMIT:
     st.markdown('<div class="section-title">Bloqueio leve de monetização</div>', unsafe_allow_html=True)
-    st.markdown('<div class="cta-box"><strong>Você está vendo uma prévia do MS Radar.</strong><div class="small" style="margin-top:8px;">As próximas oportunidades ficaram ocultas para demonstrar valor sem travar a experiência. Na evolução com pagamento real, esta mesma lógica libera a vitrine completa automaticamente.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="cta-box"><strong>Você está vendo uma prévia do MS Radar.</strong><div class="small" style="margin-top:8px;">As próximas oportunidades ficaram ocultas para demonstrar valor sem travar a experiência. Com assinatura ativa, a vitrine completa, os filtros ampliados e as exportações premium ficam liberados automaticamente.</div></div>', unsafe_allow_html=True)
 
-st.markdown('<div class="section-title">Oportunidades que pedem ação rápida</div>', unsafe_allow_html=True)
-st.markdown('<div class="section-sub">Licitações com encerramento mais próximo para priorização comercial.</div>', unsafe_allow_html=True)
-render_cards(obfuscate_items(urgentes[:6]), columns=3)
+st.markdown('<div class="section-title">Encerra hoje</div>', unsafe_allow_html=True)
+render_cards(obfuscate_items(urgentes[:6], premium), columns=3)
 
-st.markdown('<div class="section-title">Licitações de maior valor</div>', unsafe_allow_html=True)
-st.markdown('<div class="section-sub">Recorte voltado para oportunidades com maior potencial financeiro.</div>', unsafe_allow_html=True)
-render_cards(obfuscate_items(alto_valor[:6]), columns=3)
+st.markdown('<div class="section-title">Maior valor</div>', unsafe_allow_html=True)
+render_cards(obfuscate_items(alto_valor[:6], premium), columns=3)
 
 st.markdown('<div class="section-title">Oportunidades da Bahia</div>', unsafe_allow_html=True)
-st.markdown('<div class="section-sub">Vitrine rápida do estado mais importante para sua operação.</div>', unsafe_allow_html=True)
-render_cards(obfuscate_items(feed_bahia or feed_nordeste), columns=3)
-
-st.markdown('<div class="section-title">Seções por nicho</div>', unsafe_allow_html=True)
-st.markdown('<div class="section-sub">Recortes pensados para facilitar prospecção por mercado.</div>', unsafe_allow_html=True)
-selected_niche = st.selectbox('Escolha o nicho principal', list(NICHES.keys()))
-niche_feed = top_by_niche(home_feed, selected_niche, limit=6)
-if not niche_feed:
-    with st.spinner('Buscando mais resultados do nicho selecionado...'):
-        niche_feed = fetch_feed(
-            termo=termo,
-            uf=uf,
-            modalidades=modalidades or FAST_HOME_MODALIDADES,
-            max_per_modality=6,
-            page_size=12,
-            niche_filter=selected_niche,
-        )[:6]
-render_cards(obfuscate_items(niche_feed), columns=3)
-
-st.markdown('<div class="section-title">Estados em evidência</div>', unsafe_allow_html=True)
-state_options = UFS[1:] if regiao == 'Brasil' else STATE_GROUPS[regiao]
-selected_state = st.selectbox('Escolha o estado para vitrine regional', state_options)
-state_feed = top_by_state(home_feed, selected_state, limit=6)
-if not state_feed:
-    with st.spinner('Buscando oportunidades do estado selecionado...'):
-        state_feed = fetch_feed(
-            termo=termo,
-            uf=selected_state,
-            modalidades=modalidades or FAST_HOME_MODALIDADES,
-            max_per_modality=6,
-            page_size=12,
-        )[:6]
-render_cards(obfuscate_items(state_feed), columns=3)
+render_cards(obfuscate_items(feed_bahia or feed_nordeste, premium), columns=3)
 
 st.markdown('<div class="section-title">Busca avançada sob demanda</div>', unsafe_allow_html=True)
-st.markdown('<div class="section-sub">A home continua rápida porque a consulta ampliada só roda quando você pedir.</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-sub">No plano gratuito a busca avançada é mais curta. No premium, o limite cresce e a exportação sai completa.</div>', unsafe_allow_html=True)
 a1, a2, a3 = st.columns([1, 0.8, 0.8])
 with a1:
-    limit = st.slider('Máximo de resultados', min_value=10, max_value=40, value=24, step=2)
+    default_limit = 20 if premium else 8
+    limit = st.slider('Máximo de resultados', min_value=6, max_value=40 if premium else 12, value=default_limit, step=2)
 with a2:
     endpoint = st.selectbox('Tipo de leitura', ['proposta', 'publicacao'], index=0)
 with a3:
-    sort_mode = st.selectbox('Ordenar por', ['Score comercial', 'Maior valor'])
+    selected_niche = st.selectbox('Nicho', ['Todos'] + list(NICHES.keys()), index=0)
 
 if st.button('Rodar busca avançada', use_container_width=True):
     with st.spinner('Consultando o PNCP com recorte ampliado...'):
@@ -200,44 +224,25 @@ if st.button('Rodar busca avançada', use_container_width=True):
             uf=uf,
             modalidades=modalidades or FAST_HOME_MODALIDADES,
             endpoint=endpoint,
-            max_per_modality=10,
-            page_size=20,
+            max_per_modality=10 if premium else 4,
+            page_size=20 if premium else 10,
+            niche_filter=None if selected_niche == 'Todos' else selected_niche,
         )[:limit]
-    if sort_mode == 'Maior valor':
-        adv_feed = sorted(adv_feed, key=lambda x: float(x.get('valor') or 0), reverse=True)
-    st.success(f'Busca concluída com {len(adv_feed)} resultados.')
-    protected_adv = obfuscate_items(adv_feed)
-    render_cards(protected_adv[:12], columns=3)
-    visible_adv = adv_feed if premium else adv_feed[:FREE_PREVIEW_LIMIT]
-    if visible_adv:
-        csv = export_df(visible_adv).to_csv(index=False).encode('utf-8-sig')
-        st.download_button('Baixar busca atual em CSV', data=csv, file_name='ms_radar_busca_avancada_v8.csv', mime='text/csv', use_container_width=True)
+    render_cards(obfuscate_items(adv_feed, premium), columns=3)
+    if adv_feed:
+        csv = export_df(adv_feed if premium else adv_feed[:FREE_PREVIEW_LIMIT]).to_csv(index=False).encode('utf-8-sig')
+        st.download_button('Baixar resultado desta busca', data=csv, file_name='ms_radar_busca.csv', mime='text/csv', use_container_width=True)
 
-st.markdown('<div class="section-title">Inteligência comercial</div>', unsafe_allow_html=True)
-ranked = sorted(home_feed, key=lambda x: (x.get('score', 0), x.get('valor') or 0), reverse=True)
-search_term = quote_plus(termo) if termo else 'licitacao'
-left, right = st.columns([1.05, 0.95])
-with left:
-    if not ranked:
-        st.info('Sem dados para ranking agora.')
-    else:
-        visible_ranked = ranked if premium else ranked[:FREE_PREVIEW_LIMIT]
-        for pos, item in enumerate(visible_ranked[:8], start=1):
-            badge = '🏆' if pos == 1 else '⭐'
-            st.markdown(f"{badge} **#{pos} — {item['objeto']}**  \\\n{item['municipio']}/{item['uf']} • {item['modalidade']} • {item['valor_formatado']} • {item['urgencia']}")
-            if item.get('fonte'):
-                st.markdown(f"[Abrir origem]({item['fonte']})")
-with right:
-    valor_total = sum(float(x.get('valor') or 0) for x in home_feed if str(x.get('valor') or '').strip())
-    st.markdown(
-        f'''
-<div class="surface">
-  <div style="font-size:1.08rem;font-weight:900;color:white;">Mensagem pronta para apresentação</div>
-  <div class="small" style="margin-top:10px;">O MS Radar consulta o PNCP em tempo real e entrega uma entrada muito mais inteligente do que o portal bruto. Em vez de forçar o usuário a navegar em páginas frias, ele já mostra oportunidades com leitura comercial e recortes práticos para prospecção.</div>
-  <div class="small" style="margin-top:10px;">No feed atual, a plataforma exibiu <strong>{len(home_feed)}</strong> oportunidades, com valor estimado somado de <strong>{money_br(valor_total)}</strong>.</div>
-  <div class="small" style="margin-top:10px;">Esta revisão da V8 ficou pronta para demonstração comercial e preparação da camada de cobrança real na V9/V10.</div>
-</div>
-''',
-        unsafe_allow_html=True,
-    )
-    st.link_button('Abrir busca pública do termo no Google', f'https://www.google.com/search?q={search_term}+pncp', use_container_width=True)
+if user_email and subs:
+    st.markdown('<div class="section-title">Histórico de assinaturas do e-mail</div>', unsafe_allow_html=True)
+    rows = []
+    for item in subs[:10]:
+        rows.append({
+            'plano': item.get('plan_code'),
+            'status': item.get('status'),
+            'valor': money_br(item.get('amount') or 0),
+            'referência': item.get('external_reference'),
+            'criado em': item.get('created_at'),
+            'atualizado em': item.get('updated_at'),
+        })
+    st.dataframe(rows, use_container_width=True)
