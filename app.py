@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.config import PNCP_SOURCE_MODE
 from app.core.database import Database
 from app.ui import hero, kpi, set_page
 import streamlit as st
@@ -8,10 +9,7 @@ set_page('Radar Suprema')
 db = Database()
 stats = db.stats()
 
-hero(
-    'Radar Suprema de Licitações',
-    'Busca rápida sobre base própria do PNCP, com coleta resumida e enriquecimento separado para reduzir timeout e melhorar a usabilidade.',
-)
+hero('Radar Suprema de Licitações', 'Produto profissional com coleta híbrida do PNCP, base própria rápida e experiência pensada para quem trabalha no dia a dia com licitações.')
 
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
@@ -23,23 +21,21 @@ with c3:
 with c4:
     kpi('Detalhes pendentes', f"{stats['pending_details']:,}".replace(',', '.'), 'Itens prontos para enriquecimento')
 with c5:
-    kpi('Última atualização', (stats['latest'] or '—')[:16].replace('T', ' '), 'Controle do coletor')
+    kpi('Fonte ativa', PNCP_SOURCE_MODE.upper(), 'API, scraping ou híbrido')
 
-st.markdown('### Fluxo ideal de uso')
+st.markdown('### Como o sistema trabalha')
 left, right = st.columns(2)
 with left:
     st.markdown(
         '''
-        1. Em **Operação PNCP**, valide a conexão.
-        2. Rode **Coleta resumida** para alimentar a base com rapidez.
-        3. Rode **Enriquecimento de detalhes** em lotes menores.
-        4. Use **Busca Suprema**, **Radar 360** e **Alertas** sem depender do PNCP na tela.
+        1. Em **Operação PNCP**, rode o teste de conexão.
+        2. Alimente a base com a **sincronização real**.
+        3. Enriqueça os detalhes pendentes em lotes menores.
+        4. Pesquise sem travar a tela do usuário.
         '''
     )
 with right:
-    st.info(
-        'O sistema foi ajustado para evitar o erro clássico de timeout: primeiro salva os resumos, depois busca os detalhes em segunda etapa.'
-    )
+    st.info('Agora o teste respeita o mínimo de 10 itens por página e a coleta pode usar scraping público quando a API oficial estiver lenta.')
 
 runs = db.recent_sync_runs(limit=8)
 st.markdown('### Últimas sincronizações')
