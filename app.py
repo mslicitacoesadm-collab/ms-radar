@@ -2,52 +2,74 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.core.database import Database
-from app.ui import hero, kpi, set_page
+from app.core.config import PNCP_DEFAULT_DAYS_BACK, PNCP_HOME_LIMIT
+from app.core.live_service import compute_dashboard_metrics, fetch_live_notices, merge_endpoints, probe_connection_cached
+from app.core.utils import money
+from app.ui import connection_banner, hero, kpi, opportunity_card, set_page
 
-set_page('Radar Suprema Live')
-db = Database()
-stats = db.stats()
-last_pub = db.get_state('last_publication_sync', '—')
-last_open = db.get_state('last_open_sync', '—')
+set_page('Radar Espelho PNCP')
 
 hero(
-    'Radar Suprema Live',
-    'Sistema de busca e alerta de licitações com base própria. O usuário pesquisa na sua base local já sincronizada do PNCP, sem depender da resposta ao vivo do portal na hora da busca.',
+    'Radar Espelho PNCP',
+    'Consulta viva no PNCP, sem banco local e sem sincronização manual. Ao entrar, o sistema já testa a conexão e carrega oportunidades em tempo real.',
 )
+
+probe = probe_connection_cached()
+connection_banner(probe['ok'], probe['message'], probe['elapsed_seconds'])
+
+if not probe['ok']:
+    st.error('A conexão com o PNCP falhou neste momento. O sistema permanece em modo espelho e depende da resposta ao vivo da API pública.')
+    st.stop()
+
+with st.spinner('Conectando ao PNCP e carregando o painel inicial...'):
+    payload_pub = fetch_live_notices(endpoint='publicacao', days_back=PNCP_DEFAULT_DAYS_BACK, limit=PNCP_HOME_LIMIT, max_pages=2, page_size=20)
+    payload_open = fetch_live_notices(endpoint='proposta', days_back=PNCP_DEFAULT_DAYS_BACK, only_open=True, limit=PNCP_HOME_LIMIT, max_pages=2, page_size=20)
+    merged = merge_endpoints(payload_open, payload_pub, sort_by='score', limit=PNCP_HOME_LIMIT)
+
+rows = merged['rows']
+metrics = compute_dashboard_metrics(rows)
 
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
-    kpi('Base indexada', f"{stats['total']:,}".replace(',', '.'), 'Licitações gravadas na base local')
+    kpi('Resultados live', f"{metrics['total']}", 'Consulta atual sem armazenamento')
 with c2:
-    kpi('Propostas abertas', f"{stats['open_now']:,}".replace(',', '.'), 'Com recebimento em andamento')
+    kpi('Propostas abertas', f"{metrics['open_now']}", 'Com recebimento em andamento')
 with c3:
-    kpi('Urgentes 48h', f"{stats['urgent']:,}".replace(',', '.'), 'Priorização imediata')
+    kpi('Urgentes 48h', f"{metrics['urgent']}", 'Priorização imediata')
 with c4:
-    kpi('Detalhes pendentes', f"{stats['pending_details']:,}".replace(',', '.'), 'Itens a enriquecer')
+    kpi('Valor estimado', money(metrics['valor_total']), 'Soma da leitura atual')
 with c5:
-    kpi('Detalhes completos', f"{stats['detailed']:,}".replace(',', '.'), 'Itens já enriquecidos')
+    kpi('UF líder', metrics['top_uf'], metrics['top_modalidade'])
 
 left, right = st.columns([1.2, 1])
 with left:
-    st.markdown('### Fluxo operacional ideal')
+    st.markdown('### Como funciona agora')
     st.markdown(
         '''
-        1. **GitHub Actions** alimenta a base automaticamente.
-        2. **Busca Suprema** pesquisa localmente, sem timeout na tela do usuário.
-        3. **Radar Diário** mostra o que vale a pena agir agora.
-        4. **Alertas Inteligentes** transformam nichos e regiões em monitoramento contínuo.
+        1. **Ao abrir o site**, o app valida a API pública do PNCP.
+        2. **A busca é imediata**, sem depender de banco local.
+        3. **O painel classifica** urgência, valor e aderência comercial.
+        4. **Cada atualização da tela** consulta o PNCP novamente, com cache curto para evitar excesso de chamadas.
         '''
     )
 with right:
-    st.info(f'Última sincronização de publicações: **{last_pub}**\n\nÚltima verificação de propostas abertas: **{last_open}**')
+    st.info(
+        'Este projeto está em **modo espelho**. Isso significa:\n\n'
+        '- sem SQLite\n'
+        '- sem sincronização manual\n'
+        '- sem histórico persistente\n'
+        '- sem armazenamento de licitações\n\n'
+        'A informação exibida pertence apenas à consulta atual.'
+    )
 
-runs = db.recent_sync_runs(limit=10)
-st.markdown('### Histórico recente')
-if runs:
-    for run in runs:
-        st.write(f"**#{run['id']}** · {run['source']} · {run['status']} · vistos={run['total_seen']} · importados={run['total_imported']} · atualizados={run['total_updated']}")
-        if run['details']:
-            st.caption(run['details'])
+if merged['errors']:
+    with st.expander('Avisos da consulta atual'):
+        for err in merged['errors'][:12]:
+            st.warning(err)
+
+st.markdown('### Oportunidades carregadas ao entrar')
+if rows:
+    for row in rows[:12]:
+        opportunity_card(row)
 else:
-    st.warning('Ainda não há sincronizações registradas. Vá em Operação Live e rode a primeira coleta.')
+    st.info('Nenhuma oportunidade foi retornada nesta leitura inicial. Ajuste os filtros nas páginas laterais para ampliar a busca.')
