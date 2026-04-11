@@ -1,38 +1,49 @@
-name: pncp-sync
+name: pncp-sync-live
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '15 */6 * * *'
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Instalar dependências
-        run: pip install -r requirements.txt
-      - name: Coleta resumida
-        env:
-          PNCP_BASE_URL: ${{ secrets.PNCP_BASE_URL }}
-          PNCP_CONNECT_TIMEOUT: ${{ secrets.PNCP_CONNECT_TIMEOUT }}
-          PNCP_READ_TIMEOUT: ${{ secrets.PNCP_READ_TIMEOUT }}
-        run: python -c "from app.services.sync_job import sync_open_summaries; print(sync_open_summaries())"
-      - name: Enriquecer lote pequeno
-        env:
-          PNCP_BASE_URL: ${{ secrets.PNCP_BASE_URL }}
-          PNCP_CONNECT_TIMEOUT: ${{ secrets.PNCP_CONNECT_TIMEOUT }}
-          PNCP_READ_TIMEOUT: ${{ secrets.PNCP_READ_TIMEOUT }}
-        run: python -c "from app.services.sync_job import enrich_pending_details; print(enrich_pending_details(batch_size=20))"
-      - name: Commit da base atualizada
+
+      - name: Install dependencies
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/*.db || true
-          git commit -m "Atualiza base PNCP" || exit 0
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run quick sync
+        env:
+          PNCP_CONSULTA_BASE_URL: ${{ secrets.PNCP_CONSULTA_BASE_URL }}
+          RADAR_DB_PATH: data/radar_suprema_live.db
+          PNCP_CONNECT_TIMEOUT: '10'
+          PNCP_READ_TIMEOUT: '60'
+          PNCP_MAX_RETRIES: '4'
+          PNCP_RETRY_BACKOFF: '1.5'
+          PNCP_PAGE_SIZE: '20'
+          PNCP_MAX_PAGES_PER_QUERY: '8'
+          PNCP_QUICK_SYNC_DAYS: '2'
+          PNCP_DETAIL_BATCH_SIZE: '20'
+        run: |
+          python -m app.services.sync_job quick
+          python -m app.services.sync_job detalhe
+
+      - name: Commit updated database
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/radar_suprema_live.db*
+          git diff --cached --quiet || git commit -m 'chore: atualiza base PNCP'
           git push
