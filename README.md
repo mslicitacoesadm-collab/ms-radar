@@ -1,46 +1,48 @@
-# Radar Suprema de Licitações
+# Radar Suprema Live
 
-Sistema profissional de busca e alerta com **coleta híbrida do PNCP**:
+Sistema profissional de busca e alerta de licitações com **base própria local**.
 
-- **API oficial** do PNCP como fonte principal.
-- **Scraping público** do portal como apoio quando a API estiver instável.
-- **Base própria local** para garantir busca rápida e estável.
+## Ideia central
+O usuário **não pesquisa diretamente no PNCP**. O sistema sincroniza os dados do PNCP em segundo plano e grava tudo em SQLite. A pesquisa, o radar e os alertas trabalham em cima dessa base local.
 
-## Como rodar localmente
+## O que esta versão faz
+- coleta real do PNCP pela API pública de consultas;
+- sincronização de **publicações recentes**;
+- sincronização de **propostas abertas**;
+- enriquecimento de detalhes por lote;
+- busca local indexada por FTS5;
+- radar diário;
+- alertas por nicho, região e valor;
+- workflow do GitHub Actions para manter a base viva.
 
+## Variáveis importantes
+- `PNCP_CONSULTA_BASE_URL=https://pncp.gov.br/api/consulta`
+- `RADAR_DB_PATH=data/radar_suprema_live.db`
+- `PNCP_CONNECT_TIMEOUT=10`
+- `PNCP_READ_TIMEOUT=60`
+- `PNCP_PAGE_SIZE=20`
+- `PNCP_MAX_PAGES_PER_QUERY=8`
+- `PNCP_QUICK_SYNC_DAYS=2`
+- `PNCP_DETAIL_BATCH_SIZE=20`
+
+## Como subir no Streamlit Cloud
+1. Suba este projeto para o GitHub.
+2. No Streamlit, aponte o app principal para `app.py`.
+3. Em *Secrets*, informe pelo menos:
+   - `PNCP_CONSULTA_BASE_URL="https://pncp.gov.br/api/consulta"`
+   - `RADAR_DB_PATH="data/radar_suprema_live.db"`
+4. Ative o GitHub Actions no repositório.
+5. Rode o workflow manualmente na primeira vez.
+
+## Comandos locais
 ```bash
-pip install -r requirements.txt
+python -m app.services.sync_job probe
+python -m app.services.sync_job quick
+python -m app.services.sync_job detalhe
 streamlit run app.py
 ```
 
-## Variáveis opcionais
-
-```bash
-PNCP_BASE_URL=https://pncp.gov.br/api/consulta
-PNCP_PORTAL_BASE_URL=https://pncp.gov.br
-PNCP_CONNECT_TIMEOUT=8
-PNCP_READ_TIMEOUT=45
-PNCP_MAX_RETRIES=3
-PNCP_RETRY_BACKOFF=1.1
-PNCP_DEFAULT_PAGE_SIZE=20
-PNCP_DETAIL_BATCH_SIZE=25
-PNCP_SOURCE_MODE=hybrid
-RADAR_DB_PATH=data/radar_suprema.db
-RADAR_USER_AGENT=RadarSuprema/4.0
-```
-
-## Por que a versão anterior falhava
-
-O teste usava tamanho de página menor que o mínimo aceito pela API. Agora o sistema respeita o mínimo de **10** itens por página e a coleta pode alternar entre **API** e **scraping**.
-
-## Fluxo recomendado
-
-1. Abra **Operação PNCP**.
-2. Clique em **Testar conexão com o PNCP**.
-3. Execute **Sincronizar base real agora**.
-4. Em seguida, rode **Enriquecer detalhes pendentes** em lotes menores.
-5. Pesquise e filtre na base local sem depender da resposta ao vivo do PNCP.
-
-## Observação importante
-
-O scraper é um apoio técnico sobre páginas públicas do portal. Se o HTML do PNCP mudar, talvez seja necessário ajustar os seletores e heurísticas de extração.
+## Estratégia recomendada
+- **GitHub Actions** alimenta a base a cada 15 minutos.
+- **Streamlit** entrega a interface.
+- O usuário final pesquisa sem ficar aguardando resposta do portal.

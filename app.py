@@ -1,50 +1,53 @@
 from __future__ import annotations
 
-from app.core.config import PNCP_SOURCE_MODE
-from app.core.database import Database
-from app.ui import hero, kpi, set_page
 import streamlit as st
 
-set_page('Radar Suprema')
+from app.core.database import Database
+from app.ui import hero, kpi, set_page
+
+set_page('Radar Suprema Live')
 db = Database()
 stats = db.stats()
+last_pub = db.get_state('last_publication_sync', '—')
+last_open = db.get_state('last_open_sync', '—')
 
-hero('Radar Suprema de Licitações', 'Produto profissional com coleta híbrida do PNCP, base própria rápida e experiência pensada para quem trabalha no dia a dia com licitações.')
+hero(
+    'Radar Suprema Live',
+    'Sistema de busca e alerta de licitações com base própria. O usuário pesquisa na sua base local já sincronizada do PNCP, sem depender da resposta ao vivo do portal na hora da busca.',
+)
 
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
-    kpi('Base indexada', f"{stats['total']:,}".replace(',', '.'), 'Oportunidades salvas localmente')
+    kpi('Base indexada', f"{stats['total']:,}".replace(',', '.'), 'Licitações gravadas na base local')
 with c2:
-    kpi('Prazo aberto', f"{stats['open_now']:,}".replace(',', '.'), 'Contratações utilizáveis agora')
+    kpi('Propostas abertas', f"{stats['open_now']:,}".replace(',', '.'), 'Com recebimento em andamento')
 with c3:
-    kpi('Urgentes 48h', f"{stats['urgent']:,}".replace(',', '.'), 'Janela de ação rápida')
+    kpi('Urgentes 48h', f"{stats['urgent']:,}".replace(',', '.'), 'Priorização imediata')
 with c4:
-    kpi('Detalhes pendentes', f"{stats['pending_details']:,}".replace(',', '.'), 'Itens prontos para enriquecimento')
+    kpi('Detalhes pendentes', f"{stats['pending_details']:,}".replace(',', '.'), 'Itens a enriquecer')
 with c5:
-    kpi('Fonte ativa', PNCP_SOURCE_MODE.upper(), 'API, scraping ou híbrido')
+    kpi('Detalhes completos', f"{stats['detailed']:,}".replace(',', '.'), 'Itens já enriquecidos')
 
-st.markdown('### Como o sistema trabalha')
-left, right = st.columns(2)
+left, right = st.columns([1.2, 1])
 with left:
+    st.markdown('### Fluxo operacional ideal')
     st.markdown(
         '''
-        1. Em **Operação PNCP**, rode o teste de conexão.
-        2. Alimente a base com a **sincronização real**.
-        3. Enriqueça os detalhes pendentes em lotes menores.
-        4. Pesquise sem travar a tela do usuário.
+        1. **GitHub Actions** alimenta a base automaticamente.
+        2. **Busca Suprema** pesquisa localmente, sem timeout na tela do usuário.
+        3. **Radar Diário** mostra o que vale a pena agir agora.
+        4. **Alertas Inteligentes** transformam nichos e regiões em monitoramento contínuo.
         '''
     )
 with right:
-    st.info('Agora o teste respeita o mínimo de 10 itens por página e a coleta pode usar scraping público quando a API oficial estiver lenta.')
+    st.info(f'Última sincronização de publicações: **{last_pub}**\n\nÚltima verificação de propostas abertas: **{last_open}**')
 
-runs = db.recent_sync_runs(limit=8)
-st.markdown('### Últimas sincronizações')
+runs = db.recent_sync_runs(limit=10)
+st.markdown('### Histórico recente')
 if runs:
     for run in runs:
-        st.write(
-            f"**#{run['id']}** · {run['source']} · {run['status']} · {run['started_at'][:16].replace('T', ' ')} · vistos={run['total_seen']} · importados={run['total_imported']} · atualizados={run['total_updated']}"
-        )
+        st.write(f"**#{run['id']}** · {run['source']} · {run['status']} · vistos={run['total_seen']} · importados={run['total_imported']} · atualizados={run['total_updated']}")
         if run['details']:
             st.caption(run['details'])
 else:
-    st.warning('Nenhuma sincronização executada ainda. Vá para Operação PNCP para testar conexão e alimentar a base.')
+    st.warning('Ainda não há sincronizações registradas. Vá em Operação Live e rode a primeira coleta.')
