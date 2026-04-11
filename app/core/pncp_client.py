@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 import json
 import time
@@ -91,8 +92,15 @@ class PNCPClient:
 
     def probe(self) -> ProbeResult:
         start = time.perf_counter()
+        today = date.today()
         try:
-            payload = self.list_published(data_inicial=pncp_date(time.strftime('%Y-%m-%d')), data_final=pncp_date(time.strftime('%Y-%m-%d')), codigo_modalidade=6, pagina=1, tamanho_pagina=10)
+            payload = self.list_published(
+                data_inicial=pncp_date(today),
+                data_final=pncp_date(today),
+                codigo_modalidade=6,
+                pagina=1,
+                tamanho_pagina=10,
+            )
             elapsed = round(time.perf_counter() - start, 2)
             return ProbeResult(True, 200, elapsed, f"Conexão OK. Registros={payload.get('totalRegistros', 0)}")
         except Exception as exc:
@@ -124,12 +132,6 @@ class PNCPClient:
         params['dataInicial'] = pncp_date(data_inicial)
         params['dataFinal'] = pncp_date(data_final)
         return self._get('/v1/contratacoes/publicacao', params)
-
-    def list_updated(self, *, data_inicial: str, data_final: str, codigo_modalidade: int, pagina: int = 1, tamanho_pagina: int = 20, **filters: Any) -> dict[str, Any]:
-        params = self._common_params(pagina=pagina, tamanho_pagina=tamanho_pagina, codigo_modalidade=codigo_modalidade, **filters)
-        params['dataInicial'] = pncp_date(data_inicial)
-        params['dataFinal'] = pncp_date(data_final)
-        return self._get('/v1/contratacoes/atualizacao', params)
 
     def list_open_proposals(self, *, data_final: str, codigo_modalidade: int, pagina: int = 1, tamanho_pagina: int = 20, **filters: Any) -> dict[str, Any]:
         params = self._common_params(pagina=pagina, tamanho_pagina=tamanho_pagina, codigo_modalidade=codigo_modalidade, **filters)
