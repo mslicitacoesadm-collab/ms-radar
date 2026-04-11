@@ -35,12 +35,16 @@ def inject_css() -> None:
             box-shadow: 0 10px 26px rgba(15,23,42,.05);
         }
         .card-title {font-size:1.12rem; font-weight:700; color:#0f172a; margin-bottom:.35rem;}
-        .muted {color:#64748b; font-size:.92rem;}
         .pill {display:inline-block; padding: .28rem .65rem; border-radius: 999px; background:#eff6ff; color:#1d4ed8; font-size:.78rem; margin:0 .35rem .35rem 0;}
         .pill-green {background:#ecfdf5; color:#047857;}
         .pill-amber {background:#fffbeb; color:#b45309;}
+        .pill-red {background:#fef2f2; color:#b91c1c;}
         .score-circle {background:#0f766e; color:white; width:78px; height:78px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-size:1.5rem; font-weight:700; margin:0 auto 8px auto;}
-        .section-title {font-size:1.2rem; font-weight:700; margin:.4rem 0 .9rem 0;}
+        .status-ok, .status-error {
+            border-radius: 18px; padding: 14px 16px; margin-bottom: 16px; font-size: .95rem; border:1px solid;
+        }
+        .status-ok {background:#ecfdf5; color:#065f46; border-color:#a7f3d0;}
+        .status-error {background:#fef2f2; color:#991b1b; border-color:#fecaca;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -58,6 +62,12 @@ def kpi(label: str, value: str, sub: str = '') -> None:
     )
 
 
+def connection_banner(ok: bool, message: str, elapsed_seconds: float | None = None) -> None:
+    klass = 'status-ok' if ok else 'status-error'
+    extra = f' · tempo={elapsed_seconds}s' if elapsed_seconds is not None else ''
+    st.markdown(f"<div class='{klass}'><strong>PNCP ao vivo</strong> — {message}{extra}</div>", unsafe_allow_html=True)
+
+
 def opportunity_card(row: dict) -> None:
     score = row.get('oportunidade_score', 0)
     st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -72,8 +82,14 @@ def opportunity_card(row: dict) -> None:
         ]
         if row.get('is_open_proposal'):
             chips.append('Recebimento aberto')
+        if row.get('nichos'):
+            chips.extend(row['nichos'][:2])
         for chip in chips:
-            klass = 'pill pill-green' if chip == 'Recebimento aberto' else 'pill'
+            klass = 'pill'
+            if chip == 'Recebimento aberto':
+                klass = 'pill pill-green'
+            elif chip.startswith('Prazo:') and chip[7:17] != '—':
+                klass = 'pill pill-amber'
             st.markdown(f"<span class='{klass}'>{chip}</span>", unsafe_allow_html=True)
         st.write(row.get('objeto_compra') or 'Sem descrição do objeto.')
         links = []
