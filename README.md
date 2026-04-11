@@ -1,15 +1,19 @@
-# Radar Espelho PNCP
+# MS Radar V8 revisada
 
-Projeto Streamlit em **modo espelho**, sem banco de dados e sem persistência local.
+Esta é a versão V8 revisada do MS Radar, com foco em:
 
-## O que esta versão faz
+- **modo espelho do PNCP**
+- **sem banco persistente de licitações**
+- **home comercial rápida**
+- **monetização leve por prévia gratuita**
+- **simulação de desbloqueio premium na sessão**
 
-- conecta automaticamente com a API pública do PNCP ao entrar no site
-- consulta licitações ao vivo
-- não usa SQLite
-- não grava licitações localmente
-- usa apenas cache curto do Streamlit para reduzir chamadas repetidas
-- exporta apenas o resultado visível da consulta atual
+## Estrutura
+
+- `app.py` — app principal do Streamlit
+- `core/pncp.py` — leitura rápida do PNCP e renderização
+- `core/monetizacao.py` — lógica da prévia gratuita e desbloqueio premium na sessão
+- `assets/logo_ms_radar.png` — logo da marca
 
 ## Como rodar
 
@@ -18,15 +22,14 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Variáveis úteis
+## O que foi revisado
 
-- `PNCP_PAGE_SIZE` — tamanho da página da API
-- `PNCP_MAX_PAGES_PER_QUERY` — quantidade máxima de páginas por leitura
-- `PNCP_DEFAULT_DAYS_BACK` — janela padrão de dias
-- `PNCP_CACHE_TTL_SECONDS` — cache curto em memória
-- `PNCP_CONNECT_TIMEOUT`
-- `PNCP_READ_TIMEOUT`
+- remoção de dependências desnecessárias para esta etapa
+- preservação da home rápida
+- prévia gratuita com bloqueio leve revisada
+- exportação respeitando o plano atual
+- navegação concentrada na página principal
 
 ## Observação
 
-Este projeto depende da disponibilidade da API pública do PNCP. Se a API estiver indisponível, a interface informa a falha e não simula dados armazenados.
+Nesta V8 revisada, o premium é **simulado na própria sessão** apenas para validação comercial e de usabilidade. A cobrança real ficou para as versões seguintes.
