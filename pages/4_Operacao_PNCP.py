@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.core.config import MODALIDADES
+from app.core.config import MODALIDADES, PNCP_SOURCE_MODE
 from app.core.database import Database
 from app.services.sync_job import enrich_pending_details, probe_pncp_connection, sync_open_summaries
 from app.ui import hero, rows_to_df, set_page
@@ -10,7 +10,7 @@ from app.ui import hero, rows_to_df, set_page
 set_page('Operação PNCP')
 db = Database()
 stats = db.stats()
-hero('Operação PNCP', 'Coleta enxuta, enriquecimento separado e base própria rápida para busca profissional.')
+hero('Operação PNCP', 'Coleta híbrida real do PNCP: API oficial primeiro, scraping público como apoio, e base própria para busca rápida.')
 
 c1, c2, c3, c4 = st.columns(4)
 with c1:
@@ -20,7 +20,7 @@ with c2:
 with c3:
     st.metric('Detalhes completos', f"{stats['detailed']:,}".replace(',', '.'))
 with c4:
-    st.metric('Em prazo aberto', f"{stats['open_now']:,}".replace(',', '.'))
+    st.metric('Modo da fonte', PNCP_SOURCE_MODE.upper())
 
 st.markdown('## 1) Teste de conexão')
 probe_col1, probe_col2 = st.columns([2, 1])
@@ -31,9 +31,10 @@ with probe_col2:
         with st.spinner('Validando conexão...'):
             result = probe_pncp_connection(None if probe_modalidade == 0 else probe_modalidade)
         if result['ok']:
-            st.success(f"{result['message']} · tempo={result['elapsed_seconds']}s")
+            st.success(f"{result['message']} · fonte={result['source']} · tempo={result['elapsed_seconds']}s")
         else:
-            st.error(f"Falha de conexão: {result['message']} · tempo={result['elapsed_seconds']}s")
+            st.error(f"Falha de conexão: {result['message']} · fonte={result.get('source','?')} · tempo={result['elapsed_seconds']}s")
+            st.caption('O teste agora usa tamanho de página mínimo de 10 e tenta a API oficial antes do scraping público.')
 
 st.markdown('## 2) Coleta resumida')
 with st.form('summary_sync_form'):
@@ -41,31 +42,27 @@ with st.form('summary_sync_form'):
     with s1:
         modalidade = st.selectbox('Modalidade', options=[0] + list(MODALIDADES.keys()), format_func=lambda x: 'Auto / todas as necessárias' if x == 0 else MODALIDADES[x])
     with s2:
-        max_pages = st.slider('Máximo de páginas', 1, 80, 12)
+        max_pages = st.slider('Máximo de páginas', 1, 50, 8)
     with s3:
         page_size = st.selectbox('Tamanho da página', [10, 20, 50], index=1)
-    summary_submitted = st.form_submit_button('Sincronizar resumos agora')
+    summary_submitted = st.form_submit_button('Sincronizar base real agora')
 
 if summary_submitted:
-    with st.spinner('Sincronizando resumos reais do PNCP...'):
+    with st.spinner('Sincronizando dados reais do PNCP...'):
         try:
-            result = sync_open_summaries(
-                codigo_modalidade=None if modalidade == 0 else modalidade,
-                max_pages=max_pages,
-                page_size=page_size,
-            )
+            result = sync_open_summaries(codigo_modalidade=None if modalidade == 0 else modalidade, max_pages=max_pages, page_size=page_size)
             msg = f"Concluído. vistos={result['seen']} · linhas={result['rows']} · importados={result['imported']} · atualizados={result['updated']}"
             if result['errors']:
-                st.warning(msg)
+                st.warning(msg + f" · fontes={', '.join(result['sources_used'])}")
                 st.caption('\n'.join(result['errors'][:10]))
             else:
-                st.success(msg)
+                st.success(msg + f" · fontes={', '.join(result['sources_used'])}")
         except Exception as exc:
             st.error(f'Falha ao sincronizar o PNCP: {exc}')
 
 st.markdown('## 3) Enriquecimento de detalhes')
 with st.form('detail_sync_form'):
-    batch_size = st.slider('Quantidade de itens para enriquecer', 5, 120, 30)
+    batch_size = st.slider('Quantidade de itens para enriquecer', 5, 80, 20)
     detail_submitted = st.form_submit_button('Enriquecer detalhes pendentes')
 
 if detail_submitted:
@@ -85,7 +82,7 @@ st.markdown('## 4) Exportação rápida')
 rows = db.export_rows(
     """
     SELECT numero_controle_pncp, resumo_objeto, orgao_razao_social, municipio_nome, uf_sigla,
-           modalidade_nome, data_encerramento_proposta, valor_total_estimado, oportunidade_score, detail_status
+           modalidade_nome, data_encerramento_proposta, valor_total_estimado, oportunidade_score, detail_status, fonte_tipo
     FROM opportunities
     ORDER BY oportunidade_score DESC, data_encerramento_proposta ASC
     LIMIT 1000
