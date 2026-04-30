@@ -1,427 +1,292 @@
 from __future__ import annotations
 
-import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+import json
+import os
 
-import pandas as pd
 import requests
-import streamlit as st
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-API_BASE = "https://pncp.gov.br/api/consulta/v1"
-DEFAULT_TIMEOUT = 7
-MAX_WORKERS = 4
-FAST_HOME_MODALIDADES = [6, 4, 8]
-MAX_HOME_ITEMS = 12
-
-MODALIDADES = {
-    1: "Convite",
-    2: "Tomada de Preços",
-    3: "Concorrência",
-    4: "Concorrência Eletrônica",
-    5: "Concurso",
-    6: "Pregão Eletrônico",
-    7: "Pregão Presencial",
-    8: "Dispensa de Licitação",
-    9: "Inexigibilidade",
-    10: "Leilão",
-    11: "Diálogo Competitivo",
-    12: "Manifestação de Interesse",
-    13: "Pré-qualificação",
+PNCP_API_BASE = os.getenv('PNCP_API_BASE', 'https://pncp.gov.br/api/consulta')
+DEFAULT_MODALITIES = {
+    6: 'Pregão Eletrônico',
+    4: 'Concorrência Eletrônica',
+    8: 'Dispensa de Licitação',
+    1: 'Concorrência',
+    2: 'Tomada de Preços',
+    3: 'Convite',
+    5: 'Leilão',
+    7: 'Concurso',
 }
-
-UFS = [
-    "Todas", "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT",
-    "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO",
-]
-
-NICHES = {
-    "Limpeza e conservação": ["limpeza", "conservação", "higienização", "material de limpeza", "faxina"],
-    "Medicamentos e saúde": ["medicamentos", "hospitalar", "saúde", "material hospitalar", "farmácia"],
-    "Transporte e locação": ["transporte", "veículos", "locação", "combustível", "ônibus"],
-    "Obras e engenharia": ["obra", "engenharia", "reforma", "construção", "pavimentação"],
-    "Tecnologia e informática": ["software", "informática", "computadores", "licença", "sistema"],
-    "Alimentação escolar": ["gêneros alimentícios", "merenda", "alimentação", "cestas", "alimentos"],
-}
-
-STATE_GROUPS = {
-    "Nordeste": ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"],
-    "Sudeste": ["ES", "MG", "RJ", "SP"],
-    "Sul": ["PR", "RS", "SC"],
-    "Centro-Oeste": ["DF", "GO", "MS", "MT"],
-    "Norte": ["AC", "AM", "AP", "PA", "RO", "RR", "TO"],
-}
-
-CUSTOM_CSS = """
-<style>
-:root {
-  --bg: #06111f;
-  --panel: rgba(8, 19, 35, .92);
-  --panel-2: rgba(11, 27, 50, .92);
-  --line: rgba(116, 195, 255, .14);
-  --text: #eef7ff;
-  --muted: #9cb5cf;
-  --blue1: #0b4fa8;
-  --blue2: #33c8ff;
-  --green: #22c55e;
-  --amber: #f59e0b;
-  --red: #ef4444;
-}
-html, body, .stApp {
-  background:
-    radial-gradient(circle at top left, rgba(51,200,255,.10), transparent 22%),
-    radial-gradient(circle at top right, rgba(11,79,168,.18), transparent 23%),
-    linear-gradient(180deg, #02070f 0%, #081321 100%);
-  color: var(--text);
-}
-.block-container {max-width: 1420px; padding-top: 1rem; padding-bottom: 2rem;}
-section[data-testid='stSidebar'], button[kind='header'], div[data-testid='collapsedControl'] {display:none !important;}
-.hero, .surface, .kpi, .cta-box, .nav-box, .segment-box, .filter-shell {
-  background: linear-gradient(180deg, rgba(8,19,35,.96), rgba(10,25,46,.92));
-  border: 1px solid var(--line);
-  border-radius: 24px;
-  box-shadow: 0 18px 50px rgba(0,0,0,.28);
-}
-.hero {padding: 28px 30px;}
-.hero h1 {font-size: 2.85rem; line-height: 1.02; margin: 10px 0 12px; color: white; letter-spacing: -0.02em;}
-.hero p {font-size: 1rem; color: #d5e8fb; max-width: 980px;}
-.hero-top {display:flex; align-items:center; gap:12px; flex-wrap:wrap;}
-.ribbon {
-  display:inline-flex; align-items:center; gap:8px; padding:8px 14px; border-radius:999px;
-  background: rgba(51,200,255,.10); color:#e8f8ff; border:1px solid rgba(51,200,255,.22); font-weight:800; font-size:.83rem;
-}
-.kpi {padding: 18px; min-height: 128px;}
-.kpi .label {color: var(--muted); font-size: .88rem;}
-.kpi .value {font-size: 2rem; font-weight: 900; color: white; margin-top: 6px;}
-.kpi .note {font-size: .85rem; color: #c4d7ea; margin-top: 8px;}
-.section-title {font-size: 1.24rem; font-weight: 900; margin: 16px 0 12px; color: white;}
-.section-sub {font-size: .92rem; color: var(--muted); margin-top: -4px; margin-bottom: 12px;}
-.surface, .cta-box, .nav-box, .segment-box, .filter-shell {padding: 16px 18px;}
-.card {
-  border:1px solid var(--line); border-radius:24px; padding:18px; min-height:320px;
-  background: linear-gradient(180deg, rgba(8,19,35,.96), rgba(7,16,31,.95)); box-shadow:0 10px 28px rgba(0,0,0,.22); margin-bottom: 14px;
-}
-.card h3 {margin:0; color:white; font-size:1rem; line-height:1.28;}
-.card-orgao {color:#d4e5f6; margin-top:10px; font-weight:700; min-height:42px;}
-.chips {display:flex; flex-wrap:wrap; gap:8px; margin:12px 0;}
-.chip {padding:6px 10px; border-radius:999px; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); color:#dceeff; font-size:.77rem;}
-.meta {display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:10px 0 12px;}
-.meta-box {padding:11px; border-radius:16px; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.06);}
-.meta-label {font-size:.75rem; color:var(--muted);} .meta-value {font-size:.92rem; color:white; font-weight:900; margin-top:3px;}
-.badge {padding:7px 10px; border-radius:999px; font-size:.74rem; font-weight:900; white-space:nowrap;}
-.badge-ok {background: rgba(34,197,94,.12); color:#86efac; border:1px solid rgba(34,197,94,.24);} 
-.badge-warn {background: rgba(245,158,11,.12); color:#fde68a; border:1px solid rgba(245,158,11,.24);} 
-.badge-danger {background: rgba(239,68,68,.12); color:#fca5a5; border:1px solid rgba(239,68,68,.24);} 
-.badge-neutral {background: rgba(148,163,184,.12); color:#cbd5e1; border:1px solid rgba(148,163,184,.24);} 
-.actions {display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:14px;}
-.btn-link {
-  display:inline-flex; align-items:center; justify-content:center; text-decoration:none; font-weight:800; color:white !important;
-  padding:10px 14px; border-radius:14px; background: linear-gradient(135deg, var(--blue1), var(--blue2));
-}
-.small, .muted {color: var(--muted);} 
-.stDownloadButton button, .stButton button {
-  border-radius: 14px !important; font-weight: 800 !important; min-height: 2.8rem;
-}
-.note-line {color:#bfe7ff; font-weight:700;}
-</style>
-"""
+DEFAULT_HOME_MODALITIES = [6, 4, 8]
+SAMPLE_FILE = Path(__file__).resolve().parent.parent / 'data' / 'sample_notices.json'
 
 
-def setup_page(title: str = "MS Radar", icon: str = "📡") -> None:
-    st.set_page_config(page_title=title, page_icon=icon, layout="wide", initial_sidebar_state="collapsed")
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+class PNCPError(Exception):
+    pass
 
 
-def money_br(value: Any) -> str:
-    try:
-        v = float(value)
-        s = f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        return f"R$ {s}"
-    except Exception:
-        return "Não informado"
+@dataclass
+class FeedResult:
+    notices: list[dict[str, Any]]
+    source: str
+    message: str
 
 
-def parse_date(value: Optional[str]) -> Optional[datetime]:
-    if not value:
+def _make_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=2,
+        connect=2,
+        read=2,
+        status=2,
+        allowed_methods=['GET'],
+        status_forcelist=[408, 429, 500, 502, 503, 504],
+        backoff_factor=0.4,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    session.headers.update({
+        'accept': 'application/json, text/plain, */*',
+        'User-Agent': 'MS Radar/10.1',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+    })
+    return session
+
+
+def _safe_date(value: Any) -> str | None:
+    if value in (None, ''):
         return None
-    raw = str(value).strip().replace("Z", "")
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+    if isinstance(value, (date, datetime)):
+        return value.strftime('%Y-%m-%d')
+    text = str(value).strip()
+    if not text:
+        return None
+    if 'T' in text:
+        text = text.split('T', 1)[0]
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y'):
         try:
-            return datetime.strptime(raw[:26], fmt)
-        except Exception:
+            return datetime.strptime(text, fmt).strftime('%Y-%m-%d')
+        except ValueError:
             continue
-    return None
+    return text[:10]
 
 
-def date_br(value: Optional[str]) -> str:
-    dt = parse_date(value)
-    return dt.strftime("%d/%m/%Y %H:%M") if dt else "Não informado"
+def _text(*values: Any) -> str:
+    for value in values:
+        if value not in (None, ''):
+            return str(value).strip()
+    return ''
 
 
-def days_left(value: Optional[str]) -> Optional[int]:
-    dt = parse_date(value)
-    if not dt:
+def _float(value: Any) -> float | None:
+    if value in (None, ''):
         return None
-    return math.floor((dt - datetime.now()).total_seconds() / 86400)
-
-
-def urgency_label(value: Optional[str]) -> str:
-    left = days_left(value)
-    if left is None:
-        return "Sem prazo"
-    if left < 0:
-        return "Encerrada"
-    if left <= 1:
-        return "Encerra hoje"
-    if left <= 3:
-        return "Prazo curto"
-    return "Aberta"
-
-
-def urgency_html(value: Optional[str]) -> str:
-    label = urgency_label(value)
-    css = {
-        "Encerrada": "badge-danger",
-        "Encerra hoje": "badge-danger",
-        "Prazo curto": "badge-warn",
-        "Aberta": "badge-ok",
-        "Sem prazo": "badge-neutral",
-    }.get(label, "badge-neutral")
-    return f'<span class="badge {css}">{label}</span>'
-
-
-def detect_niche(text: str) -> str:
-    base = (text or "").lower()
-    for niche, terms in NICHES.items():
-        if any(term.lower() in base for term in terms):
-            return niche
-    return "Outros"
-
-
-def score_item(item: Dict[str, Any], termo: str = "") -> float:
-    score = 0.0
-    prazo = item.get("dataEncerramentoProposta") or item.get("dataAberturaProposta")
-    left = days_left(prazo)
-    if left is not None:
-        if 0 <= left <= 1:
-            score += 45
-        elif left <= 3:
-            score += 28
-        elif left <= 7:
-            score += 16
     try:
-        valor = float(item.get("valorTotalEstimado") or 0)
-        if valor >= 2_000_000:
-            score += 28
-        elif valor >= 500_000:
-            score += 18
-        elif valor > 0:
-            score += 9
+        return float(str(value).replace('.', '').replace(',', '.'))
     except Exception:
-        pass
-    modalidade = int(item.get("codigoModalidadeContratacao") or 0)
-    if modalidade == 6:
-        score += 10
-    elif modalidade == 4:
-        score += 8
-    elif modalidade == 8:
-        score += 6
-    texto = " ".join([str(item.get("objetoCompra") or ""), str(item.get("informacaoComplementar") or "")]).lower()
-    if termo:
-        termo_lower = termo.lower().strip()
-        if termo_lower in texto:
-            score += 32
-        for token in [t for t in termo_lower.split() if len(t) >= 3]:
-            if token in texto:
-                score += 5
-    return score
+        try:
+            return float(value)
+        except Exception:
+            return None
 
 
-def normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    unidade = item.get("unidadeOrgao") or {}
-    orgao = item.get("orgaoEntidade") or {}
-    municipio = unidade.get("municipioNome") or orgao.get("municipioNome") or "Município não informado"
-    uf = unidade.get("ufSigla") or orgao.get("ufSigla") or "UF"
-    modalidade_cod = item.get("codigoModalidadeContratacao")
-    modalidade = MODALIDADES.get(modalidade_cod, item.get("modalidadeNome") or "Modalidade não informada")
-    objeto = item.get("objetoCompra") or "Objeto não informado"
-    fonte = item.get("linkSistemaOrigem") or item.get("linkProcessoEletronico") or item.get("url") or ""
-    niche = detect_niche(objeto)
-    valor = item.get("valorTotalEstimado")
-    encerramento = item.get("dataEncerramentoProposta") or item.get("dataEncerramentoRecebimentoProposta")
+def _normalize_notice(item: dict[str, Any]) -> dict[str, Any]:
+    orgao = item.get('orgaoEntidade') or {}
+    unidade = item.get('unidadeOrgao') or {}
+    municipio = item.get('municipioNome') or item.get('nomeMunicipioIbge') or unidade.get('municipioNome') or unidade.get('nomeMunicipioIbge')
+    uf = item.get('ufSigla') or unidade.get('ufSigla') or item.get('uf')
+    modalidade_codigo = item.get('codigoModalidadeContratacao')
+    numero = _text(item.get('numeroControlePNCP'), item.get('numeroCompra'), item.get('sequencialCompra'))
+    ano = _text(item.get('anoCompra'))
+    title = _text(
+        item.get('objetoCompra'),
+        item.get('titulo'),
+        item.get('descricao'),
+        f"{DEFAULT_MODALITIES.get(modalidade_codigo, 'Licitação')} {numero}/{ano}".strip('/'),
+    )
+    source_url = _text(
+        item.get('linkSistemaOrigem'),
+        item.get('urlSistemaOrigem'),
+        item.get('linkProcessoEletronico'),
+        'https://pncp.gov.br',
+    )
     return {
-        "id": item.get("numeroControlePNCP") or item.get("numeroCompra") or f"{municipio}-{modalidade_cod}-{objeto[:24]}",
-        "objeto": objeto,
-        "orgao": orgao.get("razaoSocial") or unidade.get("nomeUnidade") or "Órgão não informado",
-        "municipio": municipio,
-        "uf": uf,
-        "modalidade": modalidade,
-        "modalidade_codigo": modalidade_cod,
-        "valor": valor,
-        "valor_formatado": money_br(valor),
-        "abertura": item.get("dataAberturaProposta") or item.get("dataPublicacaoPncp"),
-        "encerramento": encerramento,
-        "urgencia": urgency_label(encerramento),
-        "fonte": fonte,
-        "nicho": niche,
-        "score": 0,
-        "raw": item,
+        'source_id': _text(item.get('numeroControlePNCP'), item.get('id'), numero or title),
+        'title': title,
+        'object_text': _text(item.get('objetoCompra'), item.get('informacaoComplementar'), item.get('descricao')),
+        'agency': _text(orgao.get('razaoSocial'), orgao.get('nome'), unidade.get('nomeUnidade'), item.get('orgaoEntidadeRazaoSocial')),
+        'state': _text(uf),
+        'city': _text(municipio),
+        'modality': _text(item.get('modalidadeNome'), DEFAULT_MODALITIES.get(modalidade_codigo), item.get('modalidade')),
+        'estimated_value': _float(item.get('valorTotalEstimado'), item.get('valorEstimado'), item.get('valorTotalHomologado')),
+        'publication_date': _safe_date(item.get('dataPublicacaoPncp'), item.get('dataPublicacao')),
+        'deadline_date': _safe_date(item.get('dataEncerramentoProposta'), item.get('dataAberturaProposta'), item.get('dataEncerramento')),
+        'source_url': source_url,
+        'source_system': 'PNCP',
+        'opening_date': _safe_date(item.get('dataAberturaProposta'), item.get('dataAbertura')),
+        'situation': _text(item.get('situacaoCompraNome'), item.get('situacaoNome'), item.get('situacaoCompraId')), 
+        'numero_controle_pncp': _text(item.get('numeroControlePNCP')),
     }
 
 
-def _request(path: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-    response = requests.get(f"{API_BASE}/{path}", params=params, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
-    payload = response.json()
-    data = payload.get("data") if isinstance(payload, dict) else payload
+def load_sample_notices() -> list[dict[str, Any]]:
+    data = json.loads(SAMPLE_FILE.read_text(encoding='utf-8'))
     return data if isinstance(data, list) else []
 
 
-@st.cache_data(ttl=45, show_spinner=False)
-def test_connection() -> Dict[str, Any]:
-    start = datetime.now()
+def probe_connection() -> tuple[bool, str]:
+    session = _make_session()
+    today = date.today().strftime('%Y-%m-%d')
+    params = {
+        'dataFinal': today,
+        'codigoModalidadeContratacao': 6,
+        'pagina': 1,
+        'tamanhoPagina': 10,
+    }
     try:
-        rows = _request("proposta", {"pagina": 1, "tamanhoPagina": 1})
-        ms = int((datetime.now() - start).total_seconds() * 1000)
-        return {"ok": True, "latency_ms": ms, "sample": len(rows)}
+        resp = session.get(f'{PNCP_API_BASE}/v1/contratacoes/proposta', params=params, timeout=(3, 8))
+        if resp.status_code < 400:
+            return True, 'Conexão ao PNCP disponível.'
+        return False, f'PNCP respondeu HTTP {resp.status_code}.'
     except Exception as exc:
-        ms = int((datetime.now() - start).total_seconds() * 1000)
-        return {"ok": False, "latency_ms": ms, "error": str(exc)}
+        return False, f'PNCP indisponível no momento: {exc}'
 
 
-@st.cache_data(ttl=70, show_spinner=False)
-def fetch_feed(
-    termo: str = "",
-    uf: str = "Todas",
-    modalidades: Optional[List[int]] = None,
-    endpoint: str = "proposta",
-    max_per_modality: int = 6,
-    page_size: int = 10,
-    niche_filter: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    modalidades = modalidades or FAST_HOME_MODALIDADES
-    termo = (termo or "").strip()
+def _fetch_endpoint(modality_code: int, page: int = 1, page_size: int = 10, uf: str | None = None) -> list[dict[str, Any]]:
+    session = _make_session()
+    params: dict[str, Any] = {
+        'dataFinal': date.today().strftime('%Y-%m-%d'),
+        'codigoModalidadeContratacao': modality_code,
+        'pagina': page,
+        'tamanhoPagina': max(10, int(page_size)),
+    }
+    if uf:
+        params['uf'] = uf
+    url = f'{PNCP_API_BASE}/v1/contratacoes/proposta'
+    response = session.get(url, params=params, timeout=(3, 12))
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get('data') if isinstance(payload, dict) else payload
+    if not isinstance(data, list):
+        return []
+    return [_normalize_notice(item) for item in data]
 
-    def worker(modalidade: int) -> List[Dict[str, Any]]:
-        params = {"codigoModalidadeContratacao": modalidade, "pagina": 1, "tamanhoPagina": page_size}
-        data = _request(endpoint, params)
-        items = [normalize_item(x) for x in data]
-        if uf != "Todas":
-            items = [x for x in items if str(x.get("uf", "")).upper() == uf.upper()]
-        if termo:
-            tokens = [t.lower() for t in termo.split() if len(t) >= 3]
-            filtered = []
-            for row in items:
-                hay = f"{row['objeto']} {row['orgao']} {row['municipio']} {row['uf']} {row['nicho']}".lower()
-                if termo.lower() in hay or any(tok in hay for tok in tokens):
-                    filtered.append(row)
-            items = filtered
-        if niche_filter:
-            items = [x for x in items if x.get("nicho") == niche_filter]
-        for row in items:
-            row["score"] = score_item(row["raw"], termo)
-        items.sort(key=lambda x: (x.get("score", 0), x.get("valor") or 0), reverse=True)
-        return items[:max_per_modality]
 
-    results: List[Dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(modalidades))) as ex:
-        futures = {ex.submit(worker, mod): mod for mod in modalidades}
+def _deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for item in items:
+        key = item.get('source_id') or f"{item.get('title')}|{item.get('agency')}|{item.get('deadline_date')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _sort_notices(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def key(item: dict[str, Any]) -> tuple:
+        deadline = item.get('deadline_date') or '9999-12-31'
+        value = item.get('estimated_value') or 0.0
+        return (deadline, -float(value))
+    return sorted(items, key=key)
+
+
+def fetch_home_feed(limit: int = 18, uf: str | None = None) -> FeedResult:
+    items: list[dict[str, Any]] = []
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=len(DEFAULT_HOME_MODALITIES)) as executor:
+        futures = [executor.submit(_fetch_endpoint, code, 1, 10, uf) for code in DEFAULT_HOME_MODALITIES]
         for future in as_completed(futures):
             try:
-                results.extend(future.result())
-            except Exception:
+                items.extend(future.result())
+            except Exception as exc:
+                errors.append(str(exc))
+    items = _sort_notices(_deduplicate(items))[:limit]
+    if items:
+        source = 'live'
+        message = 'Licitações carregadas em tempo real do PNCP.'
+        if errors:
+            message += ' Algumas rotas retornaram instabilidade, mas a vitrine principal foi carregada.'
+        return FeedResult(items, source, message)
+    sample = load_sample_notices()[:limit]
+    return FeedResult(sample, 'demo', 'PNCP indisponível no momento. Exibindo vitrine de demonstração para teste do sistema.')
+
+
+def apply_filters(
+    notices: list[dict[str, Any]],
+    *,
+    query: str = '',
+    uf: str = '',
+    city: str = '',
+    modality: str = '',
+    only_bahia: bool = False,
+) -> list[dict[str, Any]]:
+    q = query.strip().lower()
+    filtered = []
+    for item in notices:
+        if only_bahia and item.get('state') != 'BA':
+            continue
+        if uf and item.get('state') != uf:
+            continue
+        if city and item.get('city') != city:
+            continue
+        if modality and item.get('modality') != modality:
+            continue
+        if q:
+            haystack = ' '.join([
+                str(item.get('title', '')),
+                str(item.get('object_text', '')),
+                str(item.get('agency', '')),
+                str(item.get('city', '')),
+            ]).lower()
+            if q not in haystack:
                 continue
-
-    dedup: Dict[str, Dict[str, Any]] = {}
-    for item in results:
-        key = str(item.get("id"))
-        prev = dedup.get(key)
-        if not prev or item.get("score", 0) > prev.get("score", 0):
-            dedup[key] = item
-
-    final = list(dedup.values())
-    final.sort(key=lambda x: (x.get("score", 0), x.get("valor") or 0), reverse=True)
-    return final
+        filtered.append(item)
+    return _sort_notices(filtered)
 
 
-def export_df(items: List[Dict[str, Any]]) -> pd.DataFrame:
-    return pd.DataFrame([
-        {
-            "objeto": x["objeto"],
-            "orgao": x["orgao"],
-            "municipio": x["municipio"],
-            "uf": x["uf"],
-            "modalidade": x["modalidade"],
-            "valor_estimado": x["valor_formatado"],
-            "abertura": date_br(x["abertura"]),
-            "encerramento": date_br(x["encerramento"]),
-            "urgencia": x["urgencia"],
-            "nicho": x["nicho"],
-            "link": x["fonte"],
-        }
-        for x in items
-    ])
+def aggregate_by_key(notices: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    bucket: dict[str, int] = {}
+    for item in notices:
+        value = item.get(key) or 'Não informado'
+        bucket[value] = bucket.get(value, 0) + 1
+    rows = [{key: k, 'total': v} for k, v in bucket.items()]
+    rows.sort(key=lambda row: (-row['total'], row[key]))
+    return rows
 
 
-def render_cards(items: List[Dict[str, Any]], columns: int = 3) -> None:
-    if not items:
-        st.info("Nenhuma licitação encontrada para este recorte no momento.")
-        return
-    cols = st.columns(columns)
-    for idx, item in enumerate(items):
-        lead = "Alta chance de captura comercial" if float(item.get("valor") or 0) >= 300_000 else "Boa vitrine para prospecção"
-        with cols[idx % columns]:
-            btn = f'<a class="btn-link" href="{item["fonte"]}" target="_blank">Abrir origem</a>' if item.get("fonte") else ""
-            st.markdown(
-                f"""
-                <div class="card">
-                  <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
-                    <h3>{item['objeto']}</h3>
-                    {urgency_html(item.get('encerramento'))}
-                  </div>
-                  <div class="card-orgao">{item['orgao']}</div>
-                  <div class="chips">
-                    <span class="chip">📍 {item['municipio']}/{item['uf']}</span>
-                    <span class="chip">⚖️ {item['modalidade']}</span>
-                    <span class="chip">🏷️ {item['nicho']}</span>
-                  </div>
-                  <div class="meta">
-                    <div class="meta-box"><div class="meta-label">Valor estimado</div><div class="meta-value">{item['valor_formatado']}</div></div>
-                    <div class="meta-box"><div class="meta-label">Encerramento</div><div class="meta-value">{date_br(item['encerramento'])}</div></div>
-                  </div>
-                  <div class="small">{lead}</div>
-                  <div class="actions">
-                    <span class="muted">MS Radar • live no PNCP</span>
-                    {btn}
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+def unique_values(notices: list[dict[str, Any]], key: str) -> list[str]:
+    values = sorted({str(item.get(key)).strip() for item in notices if item.get(key)})
+    return values
 
 
-def kpis_for(items: List[Dict[str, Any]]) -> Dict[str, Any]:
-    return {
-        "total": len(items),
-        "urgentes": sum(1 for x in items if (days_left(x.get("encerramento")) is not None and 0 <= days_left(x.get("encerramento")) <= 3)),
-        "alto_valor": sum(1 for x in items if float(x.get("valor") or 0) >= 300_000),
-        "ufs": len({x.get("uf") for x in items if x.get("uf")}),
-        "valor_total": sum(float(x.get("valor") or 0) for x in items if str(x.get("valor") or "").strip()),
-    }
+def days_to_deadline(item: dict[str, Any]) -> int | None:
+    deadline = item.get('deadline_date')
+    if not deadline:
+        return None
+    try:
+        d = datetime.strptime(deadline[:10], '%Y-%m-%d').date()
+        return (d - date.today()).days
+    except Exception:
+        return None
 
 
-def filter_urgent(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [x for x in items if x.get("urgencia") in {"Encerra hoje", "Prazo curto"}]
+def top_urgent(notices: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
+    rows = [n for n in notices if days_to_deadline(n) is not None]
+    return sorted(rows, key=lambda n: (days_to_deadline(n), -(n.get('estimated_value') or 0)))[:limit]
 
 
-def filter_high_value(items: List[Dict[str, Any]], min_value: float = 300_000) -> List[Dict[str, Any]]:
-    return [x for x in items if float(x.get("valor") or 0) >= min_value]
-
-
-def top_by_state(items: List[Dict[str, Any]], uf: str, limit: int = 6) -> List[Dict[str, Any]]:
-    return [x for x in items if str(x.get("uf") or "").upper() == uf.upper()][:limit]
-
-
-def top_by_niche(items: List[Dict[str, Any]], niche: str, limit: int = 6) -> List[Dict[str, Any]]:
-    return [x for x in items if x.get("nicho") == niche][:limit]
+def top_value(notices: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
+    rows = [n for n in notices if n.get('estimated_value')]
+    return sorted(rows, key=lambda n: n.get('estimated_value') or 0, reverse=True)[:limit]
