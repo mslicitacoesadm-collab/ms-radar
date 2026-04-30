@@ -3,190 +3,239 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any
-import json
+from typing import Any, Iterable
 import os
+import re
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-PNCP_API_BASE = os.getenv('PNCP_API_BASE', 'https://pncp.gov.br/api/consulta')
-DEFAULT_MODALITIES = {
-    6: 'Pregão Eletrônico',
-    4: 'Concorrência Eletrônica',
-    8: 'Dispensa de Licitação',
-    1: 'Concorrência',
-    2: 'Tomada de Preços',
-    3: 'Convite',
-    5: 'Leilão',
-    7: 'Concurso',
+PNCP_BASE = os.getenv("PNCP_BASE", "https://pncp.gov.br/api/consulta")
+USER_AGENT = os.getenv("MS_RADAR_USER_AGENT", "MS Radar/10.1 (+https://mslicitacoes.com)")
+
+MODALIDADES: dict[int, str] = {
+    1: "Concorrência",
+    2: "Tomada de Preços",
+    3: "Convite",
+    4: "Concorrência Eletrônica",
+    5: "Leilão",
+    6: "Pregão Eletrônico",
+    7: "Concurso",
+    8: "Dispensa de Licitação",
+    9: "Inexigibilidade",
+    10: "Manifestação de Interesse",
+    11: "Pré-qualificação",
+    12: "Credenciamento",
+    13: "Leilão Eletrônico",
 }
-DEFAULT_HOME_MODALITIES = [6, 4, 8]
-SAMPLE_FILE = Path(__file__).resolve().parent.parent / 'data' / 'sample_notices.json'
 
-
-class PNCPError(Exception):
-    pass
+HOME_MODALIDADES = [6, 8, 4]
 
 
 @dataclass
-class FeedResult:
+class PNCPResult:
     notices: list[dict[str, Any]]
     source: str
+    ok: bool
     message: str
+    elapsed_ms: int = 0
 
 
-def _make_session() -> requests.Session:
-    session = requests.Session()
+class PNCPClientError(Exception):
+    pass
+
+
+def compact_date(d: date | datetime | str | None = None) -> str:
+    """PNCP consulta costuma aceitar datas no padrão AAAAMMDD."""
+    if d is None:
+        d = date.today()
+    if isinstance(d, datetime):
+        d = d.date()
+    if isinstance(d, date):
+        return d.strftime("%Y%m%d")
+    raw = str(d).strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) >= 8:
+        # aceita YYYYMMDD ou DDMMYYYY; se começa com 20, assume YYYYMMDD
+        if digits[:2] == "20":
+            return digits[:8]
+        return digits[4:8] + digits[2:4] + digits[0:2]
+    return date.today().strftime("%Y%m%d")
+
+
+def iso_date(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if "T" in raw:
+        raw = raw.split("T", 1)[0]
+    digits = re.sub(r"\D", "", raw)
+    candidates = []
+    if len(digits) >= 8:
+        if digits[:2] == "20":
+            candidates.append((digits[:4], digits[4:6], digits[6:8]))
+        candidates.append((digits[4:8], digits[2:4], digits[0:2]))
+    for y, m, d in candidates:
+        try:
+            return date(int(y), int(m), int(d)).isoformat()
+        except Exception:
+            pass
+    return raw[:10]
+
+
+def to_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace("R$", "").replace(" ", "")
+    # 1.234,56 -> 1234.56
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def first_text(*values: Any) -> str:
+    for v in values:
+        if v not in (None, ""):
+            txt = str(v).strip()
+            if txt:
+                return txt
+    return ""
+
+
+def make_session() -> requests.Session:
+    s = requests.Session()
     retry = Retry(
-        total=2,
-        connect=2,
-        read=2,
-        status=2,
-        allowed_methods=['GET'],
-        status_forcelist=[408, 429, 500, 502, 503, 504],
-        backoff_factor=0.4,
+        total=1,
+        connect=1,
+        read=1,
+        status=1,
+        backoff_factor=0.2,
+        status_forcelist=(408, 429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    session.headers.update({
-        'accept': 'application/json, text/plain, */*',
-        'User-Agent': 'MS Radar/10.1',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=12, pool_maxsize=12)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    s.headers.update({
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "pt-BR,pt;q=0.9",
     })
-    return session
+    return s
 
 
-def _safe_date(value: Any) -> str | None:
-    if value in (None, ''):
-        return None
-    if isinstance(value, (date, datetime)):
-        return value.strftime('%Y-%m-%d')
-    text = str(value).strip()
-    if not text:
-        return None
-    if 'T' in text:
-        text = text.split('T', 1)[0]
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y'):
-        try:
-            return datetime.strptime(text, fmt).strftime('%Y-%m-%d')
-        except ValueError:
-            continue
-    return text[:10]
-
-
-def _text(*values: Any) -> str:
-    for value in values:
-        if value not in (None, ''):
-            return str(value).strip()
-    return ''
-
-
-def _float(value: Any) -> float | None:
-    if value in (None, ''):
-        return None
-    try:
-        return float(str(value).replace('.', '').replace(',', '.'))
-    except Exception:
-        try:
-            return float(value)
-        except Exception:
-            return None
-
-
-def _normalize_notice(item: dict[str, Any]) -> dict[str, Any]:
-    orgao = item.get('orgaoEntidade') or {}
-    unidade = item.get('unidadeOrgao') or {}
-    municipio = item.get('municipioNome') or item.get('nomeMunicipioIbge') or unidade.get('municipioNome') or unidade.get('nomeMunicipioIbge')
-    uf = item.get('ufSigla') or unidade.get('ufSigla') or item.get('uf')
-    modalidade_codigo = item.get('codigoModalidadeContratacao')
-    numero = _text(item.get('numeroControlePNCP'), item.get('numeroCompra'), item.get('sequencialCompra'))
-    ano = _text(item.get('anoCompra'))
-    title = _text(
-        item.get('objetoCompra'),
-        item.get('titulo'),
-        item.get('descricao'),
-        f"{DEFAULT_MODALITIES.get(modalidade_codigo, 'Licitação')} {numero}/{ano}".strip('/'),
-    )
-    source_url = _text(
-        item.get('linkSistemaOrigem'),
-        item.get('urlSistemaOrigem'),
-        item.get('linkProcessoEletronico'),
-        'https://pncp.gov.br',
-    )
-    return {
-        'source_id': _text(item.get('numeroControlePNCP'), item.get('id'), numero or title),
-        'title': title,
-        'object_text': _text(item.get('objetoCompra'), item.get('informacaoComplementar'), item.get('descricao')),
-        'agency': _text(orgao.get('razaoSocial'), orgao.get('nome'), unidade.get('nomeUnidade'), item.get('orgaoEntidadeRazaoSocial')),
-        'state': _text(uf),
-        'city': _text(municipio),
-        'modality': _text(item.get('modalidadeNome'), DEFAULT_MODALITIES.get(modalidade_codigo), item.get('modalidade')),
-        'estimated_value': _float(item.get('valorTotalEstimado'), item.get('valorEstimado'), item.get('valorTotalHomologado')),
-        'publication_date': _safe_date(item.get('dataPublicacaoPncp'), item.get('dataPublicacao')),
-        'deadline_date': _safe_date(item.get('dataEncerramentoProposta'), item.get('dataAberturaProposta'), item.get('dataEncerramento')),
-        'source_url': source_url,
-        'source_system': 'PNCP',
-        'opening_date': _safe_date(item.get('dataAberturaProposta'), item.get('dataAbertura')),
-        'situation': _text(item.get('situacaoCompraNome'), item.get('situacaoNome'), item.get('situacaoCompraId')), 
-        'numero_controle_pncp': _text(item.get('numeroControlePNCP')),
-    }
-
-
-def load_sample_notices() -> list[dict[str, Any]]:
-    data = json.loads(SAMPLE_FILE.read_text(encoding='utf-8'))
-    return data if isinstance(data, list) else []
-
-
-def probe_connection() -> tuple[bool, str]:
-    session = _make_session()
-    today = date.today().strftime('%Y-%m-%d')
-    params = {
-        'dataFinal': today,
-        'codigoModalidadeContratacao': 6,
-        'pagina': 1,
-        'tamanhoPagina': 10,
-    }
-    try:
-        resp = session.get(f'{PNCP_API_BASE}/v1/contratacoes/proposta', params=params, timeout=(3, 8))
-        if resp.status_code < 400:
-            return True, 'Conexão ao PNCP disponível.'
-        return False, f'PNCP respondeu HTTP {resp.status_code}.'
-    except Exception as exc:
-        return False, f'PNCP indisponível no momento: {exc}'
-
-
-def _fetch_endpoint(modality_code: int, page: int = 1, page_size: int = 10, uf: str | None = None) -> list[dict[str, Any]]:
-    session = _make_session()
-    params: dict[str, Any] = {
-        'dataFinal': date.today().strftime('%Y-%m-%d'),
-        'codigoModalidadeContratacao': modality_code,
-        'pagina': page,
-        'tamanhoPagina': max(10, int(page_size)),
-    }
-    if uf:
-        params['uf'] = uf
-    url = f'{PNCP_API_BASE}/v1/contratacoes/proposta'
-    response = session.get(url, params=params, timeout=(3, 12))
-    response.raise_for_status()
-    payload = response.json()
-    data = payload.get('data') if isinstance(payload, dict) else payload
-    if not isinstance(data, list):
+def extract_list(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if not isinstance(payload, dict):
         return []
-    return [_normalize_notice(item) for item in data]
+    for key in ("data", "content", "items", "resultado", "resultados"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [x for x in value if isinstance(x, dict)]
+    # alguns retornos vêm como {"data": {"content": [...]}}
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("content", "items", "resultados"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+    return []
 
 
-def _deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def pncp_public_url(numero_controle: str | None) -> str:
+    if not numero_controle:
+        return "https://pncp.gov.br/app/editais"
+    return f"https://pncp.gov.br/app/editais/{numero_controle}"
+
+
+def normalize(item: dict[str, Any]) -> dict[str, Any]:
+    orgao = item.get("orgaoEntidade") or {}
+    unidade = item.get("unidadeOrgao") or {}
+    mod_code = item.get("codigoModalidadeContratacao") or item.get("modalidadeId")
+    try:
+        mod_code_int = int(mod_code) if mod_code not in (None, "") else None
+    except Exception:
+        mod_code_int = None
+
+    numero_controle = first_text(item.get("numeroControlePNCP"), item.get("numeroControlePncp"))
+    modalidade = first_text(item.get("modalidadeNome"), item.get("nomeModalidade"), MODALIDADES.get(mod_code_int), item.get("modalidade"))
+    objeto = first_text(item.get("objetoCompra"), item.get("objeto"), item.get("descricao"), item.get("informacaoComplementar"))
+    title = objeto or first_text(item.get("titulo"), f"{modalidade} {item.get('numeroCompra','')}")
+    uf = first_text(item.get("ufSigla"), item.get("uf"), unidade.get("ufSigla"), unidade.get("uf"))
+    cidade = first_text(item.get("municipioNome"), item.get("nomeMunicipioIbge"), unidade.get("municipioNome"), unidade.get("nomeMunicipioIbge"))
+    orgao_nome = first_text(orgao.get("razaoSocial"), orgao.get("nome"), item.get("orgaoEntidadeRazaoSocial"), unidade.get("nomeUnidade"), item.get("unidadeOrgaoNomeUnidade"))
+    valor = to_float(first_text(item.get("valorTotalEstimado"), item.get("valorEstimado"), item.get("valorGlobal"), item.get("valorTotalHomologado")))
+    link_origem = first_text(item.get("linkSistemaOrigem"), item.get("urlSistemaOrigem"), item.get("linkProcessoEletronico"))
+    return {
+        "id": numero_controle or first_text(item.get("id"), item.get("numeroCompra"), title),
+        "numero_controle_pncp": numero_controle,
+        "title": title[:500],
+        "object_text": objeto[:1200],
+        "agency": orgao_nome,
+        "state": uf.upper()[:2] if uf else "",
+        "city": cidade,
+        "modality": modalidade,
+        "modality_code": mod_code_int,
+        "estimated_value": valor,
+        "publication_date": iso_date(first_text(item.get("dataPublicacaoPncp"), item.get("dataPublicacao"), item.get("dataInclusao"))),
+        "deadline_date": iso_date(first_text(item.get("dataEncerramentoProposta"), item.get("dataFimRecebimentoProposta"), item.get("dataEncerramento"))),
+        "opening_date": iso_date(first_text(item.get("dataAberturaProposta"), item.get("dataInicioRecebimentoProposta"), item.get("dataAbertura"))),
+        "situation": first_text(item.get("situacaoCompraNome"), item.get("situacaoNome"), item.get("situacaoCompraId")),
+        "source_url": link_origem or pncp_public_url(numero_controle),
+        "raw": item,
+    }
+
+
+def fetch_endpoint(endpoint: str, *, modalidade: int | None = None, uf: str = "", page: int = 1, page_size: int = 10, timeout: float = 6.0, start_days: int = 30) -> list[dict[str, Any]]:
+    session = make_session()
+    today = date.today()
+    params: dict[str, Any] = {
+        "pagina": page,
+        "tamanhoPagina": page_size,
+    }
+    if endpoint == "publicacao":
+        params["dataInicial"] = compact_date(today - timedelta(days=start_days))
+        params["dataFinal"] = compact_date(today)
+    else:
+        # propostas abertas: data final da proposta até hoje/futuro conforme endpoint do PNCP
+        params["dataFinal"] = compact_date(today + timedelta(days=60))
+    if modalidade:
+        params["codigoModalidadeContratacao"] = modalidade
+    if uf:
+        params["uf"] = uf.upper()
+
+    url = f"{PNCP_BASE}/v1/contratacoes/{endpoint}"
+    response = session.get(url, params=params, timeout=(2.5, timeout))
+    if response.status_code >= 400:
+        raise PNCPClientError(f"PNCP HTTP {response.status_code}: {response.text[:180]}")
+    try:
+        payload = response.json()
+    except Exception as exc:
+        raise PNCPClientError(f"Resposta não JSON do PNCP: {exc}") from exc
+    return [normalize(x) for x in extract_list(payload)]
+
+
+def dedupe(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for item in items:
-        key = item.get('source_id') or f"{item.get('title')}|{item.get('agency')}|{item.get('deadline_date')}"
+        key = item.get("numero_controle_pncp") or item.get("id") or f"{item.get('title')}|{item.get('agency')}|{item.get('deadline_date')}"
         if key in seen:
             continue
         seen.add(key)
@@ -194,99 +243,102 @@ def _deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _sort_notices(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    def key(item: dict[str, Any]) -> tuple:
-        deadline = item.get('deadline_date') or '9999-12-31'
-        value = item.get('estimated_value') or 0.0
-        return (deadline, -float(value))
-    return sorted(items, key=key)
+def sort_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def k(x: dict[str, Any]):
+        prazo = x.get("deadline_date") or "9999-12-31"
+        valor = x.get("estimated_value") or 0
+        return (prazo, -valor)
+    return sorted(items, key=k)
 
 
-def fetch_home_feed(limit: int = 18, uf: str | None = None) -> FeedResult:
-    items: list[dict[str, Any]] = []
+def live_home_feed(limit: int = 12, uf: str = "", timeout: float = 5.0) -> PNCPResult:
+    """Feed inicial rápido: poucas chamadas paralelas. Não faz varredura pesada."""
+    started = datetime.now()
     errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=len(DEFAULT_HOME_MODALITIES)) as executor:
-        futures = [executor.submit(_fetch_endpoint, code, 1, 10, uf) for code in DEFAULT_HOME_MODALITIES]
-        for future in as_completed(futures):
+    items: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures = [ex.submit(fetch_endpoint, "proposta", modalidade=m, uf=uf, page=1, page_size=8, timeout=timeout) for m in HOME_MODALIDADES]
+        for fut in as_completed(futures):
             try:
-                items.extend(future.result())
+                items.extend(fut.result())
             except Exception as exc:
                 errors.append(str(exc))
-    items = _sort_notices(_deduplicate(items))[:limit]
+    items = sort_items(dedupe(items))[:limit]
+    elapsed = int((datetime.now() - started).total_seconds() * 1000)
     if items:
-        source = 'live'
-        message = 'Licitações carregadas em tempo real do PNCP.'
-        if errors:
-            message += ' Algumas rotas retornaram instabilidade, mas a vitrine principal foi carregada.'
-        return FeedResult(items, source, message)
-    sample = load_sample_notices()[:limit]
-    return FeedResult(sample, 'demo', 'PNCP indisponível no momento. Exibindo vitrine de demonstração para teste do sistema.')
+        return PNCPResult(items, "PNCP ao vivo", True, f"{len(items)} oportunidades carregadas do PNCP.", elapsed)
+
+    # fallback controlado: tenta publicações recentes, que costuma ser mais tolerante
+    try:
+        pub = fetch_endpoint("publicacao", modalidade=6, uf=uf, page=1, page_size=limit, timeout=timeout, start_days=15)
+        pub = sort_items(dedupe(pub))[:limit]
+        if pub:
+            return PNCPResult(pub, "PNCP publicações", True, f"Carregadas {len(pub)} publicações recentes do PNCP.", elapsed)
+    except Exception as exc:
+        errors.append(str(exc))
+
+    return PNCPResult([], "indisponível", False, "Não foi possível carregar dados do PNCP agora. Verifique conexão/endpoint ou tente novamente.", elapsed)
 
 
-def apply_filters(
-    notices: list[dict[str, Any]],
-    *,
-    query: str = '',
-    uf: str = '',
-    city: str = '',
-    modality: str = '',
-    only_bahia: bool = False,
-) -> list[dict[str, Any]]:
-    q = query.strip().lower()
-    filtered = []
-    for item in notices:
-        if only_bahia and item.get('state') != 'BA':
+def advanced_search(*, query: str = "", uf: str = "", modalidade: int | None = None, endpoint: str = "proposta", pages: int = 1, page_size: int = 20) -> PNCPResult:
+    started = datetime.now()
+    items: list[dict[str, Any]] = []
+    errors: list[str] = []
+    mods = [modalidade] if modalidade else HOME_MODALIDADES
+    jobs = []
+    with ThreadPoolExecutor(max_workers=min(6, len(mods) * max(1, pages))) as ex:
+        for m in mods:
+            for p in range(1, max(1, pages) + 1):
+                jobs.append(ex.submit(fetch_endpoint, endpoint, modalidade=m, uf=uf, page=p, page_size=page_size, timeout=8.0))
+        for fut in as_completed(jobs):
+            try:
+                items.extend(fut.result())
+            except Exception as exc:
+                errors.append(str(exc))
+    items = sort_items(dedupe(items))
+    if query:
+        items = filter_items(items, query=query)
+    elapsed = int((datetime.now() - started).total_seconds() * 1000)
+    if items:
+        return PNCPResult(items, "PNCP ao vivo", True, f"{len(items)} resultados encontrados.", elapsed)
+    return PNCPResult([], "PNCP", False, "Nenhum resultado retornado para esses filtros." + (f" Erros: {errors[:1]}" if errors else ""), elapsed)
+
+
+def filter_items(items: list[dict[str, Any]], *, query: str = "", uf: str = "", city: str = "", modality: str = "") -> list[dict[str, Any]]:
+    q = (query or "").strip().lower()
+    out = []
+    for it in items:
+        if uf and it.get("state") != uf:
             continue
-        if uf and item.get('state') != uf:
+        if city and city.lower() not in (it.get("city") or "").lower():
             continue
-        if city and item.get('city') != city:
-            continue
-        if modality and item.get('modality') != modality:
+        if modality and modality.lower() not in (it.get("modality") or "").lower():
             continue
         if q:
-            haystack = ' '.join([
-                str(item.get('title', '')),
-                str(item.get('object_text', '')),
-                str(item.get('agency', '')),
-                str(item.get('city', '')),
-            ]).lower()
-            if q not in haystack:
+            hay = " ".join(str(it.get(k, "")) for k in ("title", "object_text", "agency", "city", "state", "modality")).lower()
+            if q not in hay:
                 continue
-        filtered.append(item)
-    return _sort_notices(filtered)
-
-
-def aggregate_by_key(notices: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
-    bucket: dict[str, int] = {}
-    for item in notices:
-        value = item.get(key) or 'Não informado'
-        bucket[value] = bucket.get(value, 0) + 1
-    rows = [{key: k, 'total': v} for k, v in bucket.items()]
-    rows.sort(key=lambda row: (-row['total'], row[key]))
-    return rows
-
-
-def unique_values(notices: list[dict[str, Any]], key: str) -> list[str]:
-    values = sorted({str(item.get(key)).strip() for item in notices if item.get(key)})
-    return values
+        out.append(it)
+    return out
 
 
 def days_to_deadline(item: dict[str, Any]) -> int | None:
-    deadline = item.get('deadline_date')
-    if not deadline:
+    d = item.get("deadline_date")
+    if not d:
         return None
     try:
-        d = datetime.strptime(deadline[:10], '%Y-%m-%d').date()
-        return (d - date.today()).days
+        return (datetime.strptime(d[:10], "%Y-%m-%d").date() - date.today()).days
     except Exception:
         return None
 
 
-def top_urgent(notices: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
-    rows = [n for n in notices if days_to_deadline(n) is not None]
-    return sorted(rows, key=lambda n: (days_to_deadline(n), -(n.get('estimated_value') or 0)))[:limit]
+def unique(items: list[dict[str, Any]], key: str) -> list[str]:
+    return sorted({str(x.get(key)).strip() for x in items if x.get(key)})
 
 
-def top_value(notices: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
-    rows = [n for n in notices if n.get('estimated_value')]
-    return sorted(rows, key=lambda n: n.get('estimated_value') or 0, reverse=True)[:limit]
+def aggregate(items: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    counter: dict[str, int] = {}
+    for x in items:
+        val = str(x.get(key) or "Não informado").strip()
+        counter[val] = counter.get(val, 0) + 1
+    return [{key: k, "total": v} for k, v in sorted(counter.items(), key=lambda kv: kv[1], reverse=True)]
