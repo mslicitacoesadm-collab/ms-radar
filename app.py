@@ -8,314 +8,304 @@ import pandas as pd
 import streamlit as st
 
 from core.pncp import (
-    aggregate_by_key,
-    apply_filters,
+    MODALIDADES,
+    advanced_search,
+    aggregate,
     days_to_deadline,
-    fetch_home_feed,
-    probe_connection,
-    top_urgent,
-    top_value,
-    unique_values,
+    filter_items,
+    live_home_feed,
+    unique,
 )
 
-st.set_page_config(page_title='MS Radar', page_icon='📡', layout='wide')
+st.set_page_config(page_title="MS Radar", page_icon="📡", layout="wide", initial_sidebar_state="collapsed")
 
-PRIMARY = '#B22222'
-BG = '#F6F7F9'
-CARD = '#FFFFFF'
-TEXT = '#111827'
-MUTED = '#6B7280'
-BORDER = '#E5E7EB'
-LOGO = Path('assets/logo_ms_radar.png')
+PRIMARY = "#B42318"
+DARK = "#111827"
+MUTED = "#6B7280"
+BG = "#F6F7F9"
+BORDER = "#E5E7EB"
+LOGO = Path("assets/logo_ms_radar.png")
 
 
-def inject_css() -> None:
+def css() -> None:
     st.markdown(
         f"""
         <style>
-        .stApp {{ background: {BG}; color: {TEXT}; }}
-        [data-testid="stSidebar"] {{ display: none; }}
-        .block-container {{ padding-top: 1.1rem; padding-bottom: 2rem; max-width: 1180px; }}
-        .top-shell {{ background: linear-gradient(180deg,#ffffff 0%, #fbfbfc 100%); border:1px solid {BORDER}; border-radius:24px; padding: 18px 22px; box-shadow: 0 10px 30px rgba(17,24,39,0.05); margin-bottom: 18px; }}
-        .hero-title {{ font-size: 2rem; font-weight: 800; line-height: 1.1; letter-spacing:-0.02em; margin:0; }}
-        .hero-sub {{ color: {MUTED}; margin-top: .55rem; font-size: 1rem; }}
-        .pill-row {{ display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.9rem; }}
-        .pill {{ background:#fff; border:1px solid {BORDER}; color:{TEXT}; padding:.45rem .8rem; border-radius:999px; font-size:.85rem; }}
-        .section-title {{ font-size: 1.2rem; font-weight: 700; margin: 1rem 0 .7rem 0; }}
-        .metric-card {{ background:{CARD}; border:1px solid {BORDER}; border-radius:20px; padding:16px 18px; box-shadow: 0 8px 24px rgba(17,24,39,0.04); }}
-        .metric-value {{ font-size:1.45rem; font-weight:800; }}
-        .metric-label {{ color:{MUTED}; font-size:.92rem; margin-top:4px; }}
-        .notice-card {{ background:{CARD}; border:1px solid {BORDER}; border-radius:22px; padding:16px 18px; box-shadow: 0 8px 24px rgba(17,24,39,0.05); min-height: 228px; }}
-        .notice-title {{ font-weight:700; font-size:1rem; line-height:1.35; margin-bottom:.55rem; }}
-        .meta {{ color:{MUTED}; font-size:.88rem; margin-top:.18rem; }}
-        .tag {{ display:inline-block; background:#fff5f5; color:{PRIMARY}; border:1px solid #f8d6d6; padding:.22rem .55rem; border-radius:999px; font-size:.76rem; font-weight:700; margin-right:.35rem; margin-bottom:.35rem; }}
-        .tag-gray {{ display:inline-block; background:#f9fafb; color:{TEXT}; border:1px solid {BORDER}; padding:.22rem .55rem; border-radius:999px; font-size:.76rem; margin-right:.35rem; margin-bottom:.35rem; }}
-        .soft-panel {{ background:{CARD}; border:1px solid {BORDER}; border-radius:22px; padding:14px 18px; box-shadow: 0 8px 24px rgba(17,24,39,0.04); }}
-        div[data-testid="stHorizontalBlock"] .stButton > button {{ border-radius:999px; border:1px solid {BORDER}; background:#fff; }}
-        .footer-note {{ color:{MUTED}; font-size:.86rem; text-align:center; margin-top:1rem; }}
-        .pagination-note {{ color:{MUTED}; font-size:.85rem; margin-top:.4rem; }}
-        .nav-caption {{ color:{MUTED}; font-size:.9rem; margin-top:.3rem; }}
+        .stApp {{ background:{BG}; color:{DARK}; }}
+        [data-testid="stSidebar"] {{ display:none; }}
+        .block-container {{ max-width:1180px; padding-top:1rem; padding-bottom:2rem; }}
+        .hero {{ background:linear-gradient(135deg,#fff 0%,#fff 62%,#fff4f2 100%); border:1px solid {BORDER}; border-radius:28px; padding:22px; box-shadow:0 12px 32px rgba(17,24,39,.06); margin-bottom:18px; }}
+        .title {{ font-size:2.05rem; font-weight:900; line-height:1.08; letter-spacing:-.035em; margin:0; color:{DARK}; }}
+        .sub {{ color:{MUTED}; font-size:1rem; margin-top:.55rem; max-width:760px; }}
+        .badge {{ display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .72rem; border:1px solid {BORDER}; border-radius:999px; background:#fff; color:{DARK}; font-size:.82rem; margin:.25rem .25rem .25rem 0; }}
+        .badge-red {{ background:#fff1f0; border-color:#ffd5d2; color:{PRIMARY}; }}
+        .metric {{ background:#fff; border:1px solid {BORDER}; border-radius:20px; padding:14px 16px; box-shadow:0 8px 24px rgba(17,24,39,.045); }}
+        .metric b {{ font-size:1.45rem; color:{DARK}; display:block; }}
+        .metric span {{ color:{MUTED}; font-size:.84rem; }}
+        .section {{ font-size:1.17rem; font-weight:850; margin:1rem 0 .55rem; letter-spacing:-.015em; }}
+        .card {{ background:#fff; border:1px solid {BORDER}; border-radius:22px; padding:15px; min-height:245px; box-shadow:0 8px 24px rgba(17,24,39,.045); margin-bottom:12px; }}
+        .card:hover {{ border-color:#f2b8b5; box-shadow:0 12px 30px rgba(180,35,24,.08); }}
+        .obj {{ font-weight:850; line-height:1.25; font-size:1rem; margin:.3rem 0 .5rem; color:{DARK}; }}
+        .meta {{ color:{MUTED}; font-size:.84rem; margin:.18rem 0; }}
+        .tag {{ display:inline-block; border:1px solid {BORDER}; background:#F9FAFB; color:{DARK}; padding:.21rem .52rem; border-radius:999px; font-size:.72rem; margin:0 .25rem .3rem 0; }}
+        .urgent {{ background:#fff1f0; border-color:#ffd5d2; color:{PRIMARY}; font-weight:700; }}
+        .navbox {{ background:#fff; border:1px solid {BORDER}; border-radius:22px; padding:12px; margin:.2rem 0 1rem; box-shadow:0 8px 24px rgba(17,24,39,.04); }}
+        .statebox {{ background:#fff; border:1px solid {BORDER}; border-radius:20px; padding:14px; text-align:center; margin-bottom:12px; }}
+        .statebox b {{ font-size:1.35rem; color:{PRIMARY}; }}
+        .small {{ color:{MUTED}; font-size:.86rem; }}
+        .pagebox {{ background:#fff; border:1px solid {BORDER}; border-radius:999px; text-align:center; padding:.65rem; color:{MUTED}; }}
+        div.stButton > button {{ border-radius:999px; border:1px solid {BORDER}; background:#fff; color:{DARK}; font-weight:650; }}
+        div.stButton > button:hover {{ border-color:{PRIMARY}; color:{PRIMARY}; }}
+        div[data-testid="stRadio"] label p {{ font-weight:700; }}
+        .stLinkButton a {{ border-radius:999px !important; }}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-def fmt_money(value: Any) -> str:
-    if value in (None, ''):
-        return 'Não informado'
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_home(uf: str = ""):
+    return live_home_feed(limit=12, uf=uf, timeout=4.5)
+
+
+@st.cache_data(ttl=90, show_spinner=False)
+def cached_search(query: str, uf: str, modalidade: int | None, endpoint: str, pages: int):
+    return advanced_search(query=query, uf=uf, modalidade=modalidade, endpoint=endpoint, pages=pages, page_size=20)
+
+
+def fmt_money(v: Any) -> str:
+    if v in (None, ""):
+        return "Não informado"
     try:
-        return f"R$ {float(value):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
-        return 'Não informado'
+        return "Não informado"
 
 
-def fmt_date(value: str | None) -> str:
-    if not value:
-        return 'Não informada'
+def fmt_date(v: str | None) -> str:
+    if not v:
+        return "Não informada"
     try:
-        return datetime.strptime(value[:10], '%Y-%m-%d').strftime('%d/%m/%Y')
+        return datetime.strptime(v[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
     except Exception:
-        return value
+        return v
 
 
-def render_notice_card(item: dict[str, Any]) -> None:
-    dleft = days_to_deadline(item)
-    urgency = ''
-    if dleft is not None and dleft <= 1:
-        urgency = '<span class="tag">Encerra hoje</span>'
-    elif dleft is not None and dleft <= 3:
-        urgency = '<span class="tag">Prazo curto</span>'
+def card(item: dict[str, Any]) -> None:
+    dias = days_to_deadline(item)
+    tags = []
+    if dias is not None:
+        if dias < 0:
+            tags.append('<span class="tag">Prazo vencido</span>')
+        elif dias == 0:
+            tags.append('<span class="tag urgent">Encerra hoje</span>')
+        elif dias <= 3:
+            tags.append('<span class="tag urgent">Prazo curto</span>')
+    if item.get("estimated_value") and float(item.get("estimated_value") or 0) >= 100000:
+        tags.append('<span class="tag urgent">Alto valor</span>')
+    tags.append(f'<span class="tag">{item.get("modality") or "Modalidade"}</span>')
+    title = item.get("title") or "Licitação sem título informado"
+    obj = item.get("object_text") or ""
     st.markdown(
         f"""
-        <div class="notice-card">
-            <div>{urgency}<span class="tag-gray">{item.get('modality') or 'Modalidade não informada'}</span></div>
-            <div class="notice-title">{item.get('title') or 'Licitação sem título'}</div>
-            <div class="meta"><strong>Órgão:</strong> {item.get('agency') or 'Não informado'}</div>
-            <div class="meta"><strong>Cidade/UF:</strong> {(item.get('city') or 'Não informada')} / {(item.get('state') or '--')}</div>
-            <div class="meta"><strong>Valor estimado:</strong> {fmt_money(item.get('estimated_value'))}</div>
-            <div class="meta"><strong>Encerramento:</strong> {fmt_date(item.get('deadline_date'))}</div>
-            <div class="meta" style="margin-top:.55rem;">{(item.get('object_text') or '')[:180]}</div>
+        <div class="card">
+            <div>{''.join(tags)}</div>
+            <div class="obj">{title[:230]}</div>
+            <div class="meta"><b>Órgão:</b> {item.get('agency') or 'Não informado'}</div>
+            <div class="meta"><b>Local:</b> {item.get('city') or 'Não informado'} / {item.get('state') or '--'}</div>
+            <div class="meta"><b>Encerramento:</b> {fmt_date(item.get('deadline_date'))}</div>
+            <div class="meta"><b>Valor:</b> {fmt_money(item.get('estimated_value'))}</div>
+            <div class="meta" style="margin-top:.45rem;">{obj[:160]}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    if item.get('source_url'):
-        st.link_button('Ver detalhes', item['source_url'], use_container_width=True)
+    st.link_button("Ver no PNCP / origem", item.get("source_url") or "https://pncp.gov.br/app/editais", use_container_width=True)
 
 
-def render_paginated_cards(items: list[dict[str, Any]], key: str, per_page: int = 9) -> None:
-    total = len(items)
-    pages = max(1, (total + per_page - 1) // per_page)
-    state_key = f'page_{key}'
-    if state_key not in st.session_state:
-        st.session_state[state_key] = 1
-    st.session_state[state_key] = max(1, min(st.session_state[state_key], pages))
-    page = st.session_state[state_key]
+def paginate(items: list[dict[str, Any]], key: str, per_page: int = 9) -> None:
+    if not items:
+        st.warning("Nenhuma licitação encontrada para esse recorte.")
+        return
+    pages = max(1, (len(items) + per_page - 1) // per_page)
+    skey = f"page_{key}"
+    st.session_state.setdefault(skey, 1)
+    st.session_state[skey] = max(1, min(int(st.session_state[skey]), pages))
+    page = st.session_state[skey]
     start = (page - 1) * per_page
     chunk = items[start:start + per_page]
     cols = st.columns(3)
-    for idx, item in enumerate(chunk):
-        with cols[idx % 3]:
-            render_notice_card(item)
-    nav1, nav2, nav3 = st.columns([1, 2, 1])
-    with nav1:
-        if st.button('← Anterior', key=f'prev_{key}', disabled=page <= 1, use_container_width=True):
-            st.session_state[state_key] = page - 1
+    for i, item in enumerate(chunk):
+        with cols[i % 3]:
+            card(item)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c1:
+        if st.button("← Anterior", key=f"prev_{key}", disabled=page <= 1, use_container_width=True):
+            st.session_state[skey] = page - 1
             st.rerun()
-    with nav2:
-        st.markdown(
-            f"<div class='soft-panel' style='text-align:center; padding:.7rem 1rem;'><strong>Página {page}</strong> de {pages}<div class='pagination-note'>{total} licitações encontradas</div></div>",
-            unsafe_allow_html=True,
-        )
-    with nav3:
-        if st.button('Próxima →', key=f'next_{key}', disabled=page >= pages, use_container_width=True):
-            st.session_state[state_key] = page + 1
+    with c2:
+        st.markdown(f"<div class='pagebox'>Página <b>{page}</b> de <b>{pages}</b> · {len(items)} resultados</div>", unsafe_allow_html=True)
+    with c3:
+        if st.button("Próxima →", key=f"next_{key}", disabled=page >= pages, use_container_width=True):
+            st.session_state[skey] = page + 1
             st.rerun()
 
 
-def render_state_cards(notices: list[dict[str, Any]]) -> None:
-    states = aggregate_by_key(notices, 'state')
-    cols = st.columns(4)
-    for idx, row in enumerate(states):
-        uf = row['state']
-        total = row['total']
-        with cols[idx % 4]:
-            st.markdown(
-                f"<div class='metric-card'><div class='metric-value'>{uf}</div><div class='metric-label'>{total} licitações</div></div>",
-                unsafe_allow_html=True,
-            )
-            if st.button(f'Ver {uf}', key=f'uf_{uf}', use_container_width=True):
-                st.session_state['selected_uf'] = uf
-                st.session_state['view'] = 'Por Estado'
-                st.rerun()
+def header() -> None:
+    st.markdown('<div class="hero">', unsafe_allow_html=True)
+    left, right = st.columns([1, 2.7])
+    with left:
+        if LOGO.exists():
+            st.image(str(LOGO), width=245)
+        else:
+            st.markdown("# MS Radar")
+    with right:
+        st.markdown('<h1 class="title">Busque licitações com rapidez, sem bagunça e sem base desatualizada.</h1>', unsafe_allow_html=True)
+        st.markdown('<div class="sub">Consulta em modo espelho: o sistema busca no PNCP, apresenta em cards limpos e mantém a entrada leve para uso diário.</div>', unsafe_allow_html=True)
+        st.markdown('<span class="badge badge-red">PNCP ao vivo</span><span class="badge">Sem banco de licitações</span><span class="badge">Interface clean</span>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_city_cards(notices: list[dict[str, Any]], uf: str = '') -> None:
-    items = notices
-    if uf:
-        items = [n for n in items if n.get('state') == uf]
-    cities = aggregate_by_key(items, 'city')[:24]
+def nav() -> str:
+    st.markdown('<div class="navbox">', unsafe_allow_html=True)
+    view = st.radio(
+        "Navegação",
+        ["Início", "Por Estado", "Por Cidade", "Por Modalidade", "Filtro Avançado"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="view",
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+    return view
+
+
+def metrics(items: list[dict[str, Any]], source_msg: str, elapsed: int) -> None:
+    urg = len([x for x in items if days_to_deadline(x) is not None and 0 <= days_to_deadline(x) <= 3])
+    ba = len([x for x in items if x.get("state") == "BA"])
+    val = len([x for x in items if x.get("estimated_value")])
+    data = [("Resultados", len(items)), ("Prazo curto", urg), ("Bahia", ba), ("Com valor", val)]
     cols = st.columns(4)
-    for idx, row in enumerate(cities):
-        city = row['city']
-        total = row['total']
-        with cols[idx % 4]:
-            st.markdown(
-                f"<div class='metric-card'><div class='metric-value' style='font-size:1.05rem'>{city}</div><div class='metric-label'>{total} licitações</div></div>",
-                unsafe_allow_html=True,
-            )
+    for col, (label, value) in zip(cols, data):
+        with col:
+            st.markdown(f"<div class='metric'><b>{value}</b><span>{label}</span></div>", unsafe_allow_html=True)
+    st.caption(f"{source_msg} Tempo da última consulta: {elapsed} ms. Cache temporário: 120s.")
+
+
+def quick_filters(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    q1, q2, q3, q4 = st.columns([2.2, .8, 1.1, 1.2])
+    with q1:
+        q = st.text_input("Busca rápida", placeholder="Ex.: combustível, merenda, pneus, limpeza")
+    with q2:
+        uf = st.selectbox("UF", [""] + unique(items, "state"), format_func=lambda x: x or "Todas")
+    with q3:
+        city = st.selectbox("Cidade", [""] + unique(items, "city"), format_func=lambda x: x or "Todas")
+    with q4:
+        mod = st.selectbox("Modalidade", [""] + unique(items, "modality"), format_func=lambda x: x or "Todas")
+    return filter_items(items, query=q, uf=uf, city=city, modality=mod)
 
 
 def main() -> None:
-    inject_css()
-    st.session_state.setdefault('view', 'Início')
+    css()
+    header()
+    view = nav()
 
-    ok, probe_message = probe_connection()
-    feed = fetch_home_feed(limit=18)
-    notices = feed.notices
+    if "home_uf" not in st.session_state:
+        st.session_state.home_uf = ""
 
-    with st.container():
-        st.markdown("<div class='top-shell'>", unsafe_allow_html=True)
-        top1, top2 = st.columns([1, 2.6])
-        with top1:
-            if LOGO.exists():
-                st.image(str(LOGO), width=260)
-            else:
-                st.markdown("## MS Radar")
-        with top2:
-            st.markdown("<h1 class='hero-title'>Licitações em tempo real, com leitura simples e profissional.</h1>", unsafe_allow_html=True)
-            st.markdown("<div class='hero-sub'>Modelo espelho do PNCP, com navegação leve, filtros objetivos e vitrine pronta para uso diário.</div>", unsafe_allow_html=True)
-            badge = 'PNCP online' if ok else 'Modo demonstração'
-            st.markdown(f"<div class='pill-row'><span class='pill'>{badge}</span><span class='pill'>{feed.message}</span></div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    # Carrega automaticamente ao entrar, mas com limite curto e cache.
+    with st.spinner("Carregando vitrine rápida do PNCP..."):
+        result = cached_home(st.session_state.home_uf)
+    notices = result.notices
 
-    choice = st.radio(
-        'Navegação principal',
-        ['Início', 'Por Estado', 'Por Cidade', 'Por Modalidade', 'Filtro Avançado'],
-        horizontal=True,
-        label_visibility='collapsed',
-        key='view',
-    )
-    st.markdown("<div class='nav-caption'>Estrutura inspirada em um fluxo direto de filtro → recorte → lista, como no Buscar Licitação, que organiza a navegação por Filtro avançado, Por Estado, Por Cidade e Por Modalidade. citeturn786986view0</div>", unsafe_allow_html=True)
+    if not result.ok:
+        st.error(result.message)
+        st.info("A tela continua funcionando. Use o Filtro Avançado para tentar uma consulta direta com menos filtros ou confira se o PNCP está respondendo no seu ambiente.")
 
-    qcol1, qcol2, qcol3, qcol4 = st.columns([2.2, 1, 1, 1])
-    with qcol1:
-        quick_query = st.text_input('Busque por objeto, órgão ou cidade', placeholder='Ex.: limpeza, combustível, software, vigilância')
-    ufs = unique_values(notices, 'state')
-    cities = unique_values(notices, 'city')
-    modalities = unique_values(notices, 'modality')
-    with qcol2:
-        quick_uf = st.selectbox('UF', [''] + ufs, format_func=lambda x: x or 'Todas')
-    with qcol3:
-        quick_city = st.selectbox('Cidade', [''] + cities, format_func=lambda x: x or 'Todas')
-    with qcol4:
-        quick_modality = st.selectbox('Modalidade', [''] + modalities, format_func=lambda x: x or 'Todas')
+    filtered = quick_filters(notices)
+    metrics(filtered, result.message, result.elapsed_ms)
 
-    filtered = apply_filters(notices, query=quick_query, uf=quick_uf, city=quick_city, modality=quick_modality)
+    if view == "Início":
+        st.markdown('<div class="section">Vitrine rápida</div>', unsafe_allow_html=True)
+        paginate(filtered, "home", 9)
 
-    m1, m2, m3, m4 = st.columns(4)
-    summary = [
-        ('Resultados', len(filtered)),
-        ('Encerra rápido', len([n for n in filtered if (days_to_deadline(n) is not None and days_to_deadline(n) <= 3)])),
-        ('Bahia', len([n for n in filtered if n.get('state') == 'BA'])),
-        ('Modalidades', len(set([n.get('modality') for n in filtered if n.get('modality')]))),
-    ]
-    for col, (label, value) in zip([m1, m2, m3, m4], summary):
-        with col:
-            st.markdown(f"<div class='metric-card'><div class='metric-value'>{value}</div><div class='metric-label'>{label}</div></div>", unsafe_allow_html=True)
-
-    if choice == 'Início':
-        st.markdown("<div class='section-title'>Vitrine principal</div>", unsafe_allow_html=True)
-        render_paginated_cards(filtered, 'home', per_page=9)
-
-        a, b = st.columns(2)
-        with a:
-            st.markdown("<div class='section-title'>Prazo curto</div>", unsafe_allow_html=True)
-            urgent = top_urgent(filtered, 6)
-            if urgent:
-                for item in urgent[:3]:
-                    render_notice_card(item)
-            else:
-                st.info('Sem licitações urgentes nesta vitrine.')
-        with b:
-            st.markdown("<div class='section-title'>Maior valor</div>", unsafe_allow_html=True)
-            high = top_value(filtered, 6)
-            if high:
-                for item in high[:3]:
-                    render_notice_card(item)
-            else:
-                st.info('Sem valores estimados disponíveis nesta vitrine.')
-
-    elif choice == 'Por Estado':
-        st.markdown("<div class='section-title'>Licitações por Estado</div>", unsafe_allow_html=True)
-        st.markdown("<div class='soft-panel'>A referência trabalha esse recorte com cards por UF e ação de aprofundar. Aqui o MS Radar segue a mesma lógica, mas com visual mais limpo e foco em teste operacional. citeturn786986view0</div>", unsafe_allow_html=True)
-        render_state_cards(filtered)
-        selected = st.session_state.get('selected_uf', '')
+    elif view == "Por Estado":
+        st.markdown('<div class="section">Por Estado</div>', unsafe_allow_html=True)
+        rows = aggregate(filtered, "state")
+        cols = st.columns(4)
+        for i, row in enumerate(rows):
+            uf = row["state"]
+            total = row["total"]
+            with cols[i % 4]:
+                st.markdown(f"<div class='statebox'><b>{uf}</b><br><span class='small'>{total} licitações</span></div>", unsafe_allow_html=True)
+                if st.button(f"Abrir {uf}", key=f"open_{uf}", use_container_width=True):
+                    st.session_state.selected_uf = uf
+                    st.rerun()
+        selected = st.session_state.get("selected_uf", "")
         if selected:
-            st.markdown(f"<div class='section-title'>UF selecionada: {selected}</div>", unsafe_allow_html=True)
-            rows = apply_filters(filtered, uf=selected)
-            render_paginated_cards(rows, 'state', per_page=9)
+            st.markdown(f'<div class="section">Licitações em {selected}</div>', unsafe_allow_html=True)
+            paginate(filter_items(filtered, uf=selected), f"uf_{selected}", 9)
 
-    elif choice == 'Por Cidade':
-        st.markdown("<div class='section-title'>Licitações por Cidade</div>", unsafe_allow_html=True)
-        render_city_cards(filtered, uf=quick_uf)
-        if quick_city:
-            rows = apply_filters(filtered, city=quick_city)
-            st.markdown(f"<div class='section-title'>Cidade selecionada: {quick_city}</div>", unsafe_allow_html=True)
-            render_paginated_cards(rows, 'city', per_page=9)
-        else:
-            st.info('Selecione uma cidade acima para abrir a lista detalhada.')
+    elif view == "Por Cidade":
+        st.markdown('<div class="section">Por Cidade</div>', unsafe_allow_html=True)
+        city_rows = aggregate(filtered, "city")[:32]
+        cols = st.columns(4)
+        for i, row in enumerate(city_rows):
+            city = row["city"]
+            with cols[i % 4]:
+                st.markdown(f"<div class='statebox'><b style='font-size:1rem'>{city}</b><br><span class='small'>{row['total']} licitações</span></div>", unsafe_allow_html=True)
+                if st.button("Ver lista", key=f"city_{i}_{city}", use_container_width=True):
+                    st.session_state.selected_city = city
+                    st.rerun()
+        if st.session_state.get("selected_city"):
+            city = st.session_state.selected_city
+            st.markdown(f'<div class="section">Licitações em {city}</div>', unsafe_allow_html=True)
+            paginate(filter_items(filtered, city=city), f"city_{city}", 9)
 
-    elif choice == 'Por Modalidade':
-        st.markdown("<div class='section-title'>Licitações por Modalidade</div>", unsafe_allow_html=True)
-        mods = aggregate_by_key(filtered, 'modality')
-        mod_cols = st.columns(3)
-        for idx, row in enumerate(mods):
-            modality = row['modality']
-            total = row['total']
-            with mod_cols[idx % 3]:
-                st.markdown(f"<div class='metric-card'><div class='metric-value' style='font-size:1.05rem'>{modality}</div><div class='metric-label'>{total} licitações</div></div>", unsafe_allow_html=True)
-        if quick_modality:
-            rows = apply_filters(filtered, modality=quick_modality)
-            st.markdown(f"<div class='section-title'>Modalidade selecionada: {quick_modality}</div>", unsafe_allow_html=True)
-            render_paginated_cards(rows, 'modality', per_page=9)
-        else:
-            st.info('Selecione uma modalidade acima para abrir a lista detalhada.')
+    elif view == "Por Modalidade":
+        st.markdown('<div class="section">Por Modalidade</div>', unsafe_allow_html=True)
+        rows = aggregate(filtered, "modality")
+        cols = st.columns(3)
+        for i, row in enumerate(rows):
+            modality = row["modality"]
+            with cols[i % 3]:
+                st.markdown(f"<div class='statebox'><b style='font-size:1rem'>{modality}</b><br><span class='small'>{row['total']} licitações</span></div>", unsafe_allow_html=True)
+                if st.button("Abrir modalidade", key=f"mod_{i}_{modality}", use_container_width=True):
+                    st.session_state.selected_modality = modality
+                    st.rerun()
+        if st.session_state.get("selected_modality"):
+            mod = st.session_state.selected_modality
+            st.markdown(f'<div class="section">{mod}</div>', unsafe_allow_html=True)
+            paginate(filter_items(filtered, modality=mod), f"modality_{mod}", 9)
 
     else:
-        st.markdown("<div class='section-title'>Filtro avançado</div>", unsafe_allow_html=True)
-        adv1, adv2, adv3, adv4 = st.columns(4)
-        with adv1:
-            adv_only_ba = st.checkbox('Somente Bahia')
-        with adv2:
-            adv_value = st.selectbox('Faixa de valor', ['Todas', 'Até R$ 500 mil', 'R$ 500 mil a R$ 2 mi', 'Acima de R$ 2 mi'])
-        with adv3:
-            adv_deadline = st.selectbox('Prazo', ['Todos', 'Até 3 dias', 'Até 7 dias', 'Acima de 7 dias'])
-        with adv4:
-            export = st.button('Exportar CSV', use_container_width=True)
-        rows = apply_filters(filtered, only_bahia=adv_only_ba)
-        if adv_value != 'Todas':
-            if adv_value == 'Até R$ 500 mil':
-                rows = [r for r in rows if (r.get('estimated_value') or 0) <= 500_000]
-            elif adv_value == 'R$ 500 mil a R$ 2 mi':
-                rows = [r for r in rows if 500_000 < (r.get('estimated_value') or 0) <= 2_000_000]
-            else:
-                rows = [r for r in rows if (r.get('estimated_value') or 0) > 2_000_000]
-        if adv_deadline != 'Todos':
-            if adv_deadline == 'Até 3 dias':
-                rows = [r for r in rows if (days_to_deadline(r) is not None and days_to_deadline(r) <= 3)]
-            elif adv_deadline == 'Até 7 dias':
-                rows = [r for r in rows if (days_to_deadline(r) is not None and days_to_deadline(r) <= 7)]
-            else:
-                rows = [r for r in rows if (days_to_deadline(r) is not None and days_to_deadline(r) > 7)]
-        if export and rows:
-            df = pd.DataFrame(rows)
-            st.download_button('Baixar resultados filtrados', data=df.to_csv(index=False).encode('utf-8-sig'), file_name='ms_radar_filtro_avancado.csv', mime='text/csv')
-        render_paginated_cards(rows, 'advanced', per_page=9)
+        st.markdown('<div class="section">Filtro Avançado</div>', unsafe_allow_html=True)
+        st.caption("Essa busca é sob demanda para não deixar a entrada lenta.")
+        a, b, c, d = st.columns([2, .8, 1.4, 1])
+        with a:
+            q = st.text_input("Termo", placeholder="Ex.: transporte escolar, material de construção")
+        with b:
+            uf = st.text_input("UF", max_chars=2, placeholder="BA")
+        with c:
+            mod_name = st.selectbox("Modalidade", ["Todas"] + [f"{k} - {v}" for k, v in MODALIDADES.items()])
+        with d:
+            endpoint = st.selectbox("Tipo", ["proposta", "publicacao"], format_func=lambda x: "Propostas abertas" if x == "proposta" else "Publicações recentes")
+        pages = st.slider("Profundidade da busca", 1, 3, 1, help="Quanto maior, mais resultados, porém mais lento.")
+        modalidade = None if mod_name == "Todas" else int(mod_name.split(" - ", 1)[0])
+        if st.button("Buscar agora", type="primary", use_container_width=True):
+            with st.spinner("Consultando PNCP..."):
+                res = cached_search(q, uf.upper().strip(), modalidade, endpoint, pages)
+            st.session_state.advanced_result = res
+        if st.session_state.get("advanced_result"):
+            res = st.session_state.advanced_result
+            st.success(f"{res.message} Tempo: {res.elapsed_ms} ms") if res.ok else st.warning(res.message)
+            paginate(res.notices, "advanced", 9)
+            if res.notices:
+                df = pd.DataFrame([{k: v for k, v in x.items() if k != "raw"} for x in res.notices])
+                st.download_button("Baixar CSV", df.to_csv(index=False).encode("utf-8-sig"), "ms_radar_resultados.csv", "text/csv", use_container_width=True)
 
-    st.markdown(f"<div class='footer-note'>{probe_message} · Se a API do PNCP falhar, o app entra em modo demonstração para você validar o layout e o fluxo.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='small' style='text-align:center;margin-top:18px;'>MS Radar · consulta em tempo real ao PNCP · sem armazenamento persistente de licitações.</div>", unsafe_allow_html=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
